@@ -23,120 +23,191 @@
  * License: Open Source / Educational - Preserve attribution upon redistribution.
  *****************************************************************************/
 
+#include "catclock_atlas.h"
 #include "catclock_shared.h"
+#include <stddef.h>
+#include <math.h>
+#include <time.h>
 
-static SDL_Texture *hours_hand_atlas = NULL;
-static SDL_Texture *minutes_hand_atlas = NULL;
-static SDL_Texture *seconds_hand_atlas = NULL;
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
-/*
- * RasterizeTriangularHandToTarget:
- * Computes pixel-solid scanline rows for the counterweighted triangles.
- */
-static void RasterizeTriangularHandToTarget(SDL_Renderer *renderer, float angle, float length, float base_width, float target_cx, float target_cy) {
-    float rad_tip = (angle - 90.0f) * M_PI / 180.0f;
-    float rad_base_perpendicular = rad_tip + (M_PI / 2.0f);
-    float tail_offset = length * 0.15f;
-    float offset_cx = target_cx - tail_offset * cosf(rad_tip);
-    float offset_cy = target_cy - tail_offset * sinf(rad_tip);
+/* Generalized instance array managing hand pipeline memory layers */
+static AtlasPipelineLayer g_HandPipelineLayers[3] = {
+    { NULL, 60, 64, 64 }, /* FIX: Restored to 60 total frames for smooth fractional hour phases */
+    { NULL, 60, 64, 64 }, /* Minute Hand Sheet Spec */
+    { NULL, 60, 64, 64 }  /* Second Hand Sheet Spec */
+};
 
-    float tip_x = target_cx + length * cosf(rad_tip);
-    float tip_y = target_cy + length * sinf(rad_tip);
-    float half_base = base_width / 2.0f;
-    float base1_x = offset_cx - half_base * cosf(rad_base_perpendicular);
-    float base1_y = offset_cy - half_base * sinf(rad_base_perpendicular);
-    float base2_x = offset_cx + half_base * cosf(rad_base_perpendicular);
-    float base2_y = offset_cy + half_base * sinf(rad_base_perpendicular);
+static float g_CachedPipelineScaleX = -1.0f;
+static float g_CachedPipelineScaleY = -1.0f;
+static int g_PipelineAtlasesInitialized = 0;
 
-    OriginalPoint t0 = { base1_x, base1_y };
-    OriginalPoint t1 = { base2_x, base2_y };
-    OriginalPoint t2 = { tip_x, tip_y };
+void ResetAtlasPipelineScales(void) {
+    g_CachedPipelineScaleX = -1.0f;
+    g_CachedPipelineScaleY = -1.0f;
+    g_PipelineAtlasesInitialized = 0;
+}
 
-    float min_y = t0.y; if (t1.y < min_y) min_y = t1.y; if (t2.y < min_y) min_y = t2.y;
-    float max_y = t0.y; if (t1.y > max_y) max_y = t1.y; if (t2.y > max_y) max_y = t2.y;
-
-    int start_y = (int)floorf(min_y), end_y = (int)ceilf(max_y);
-    for (int y = start_y; y <= end_y; y++) {
-        float inter0 = 0.0f, inter1 = 0.0f;
-        int count = 0;
-
-        if (((t0.y <= y) && (t1.y > y)) || ((t1.y <= y) && (t0.y > y))) {
-            float t = (float)(y - t0.y) / (t1.y - t0.y);
-            if (count == 0) inter0 = t0.x + t * (t1.x - t0.x);
-            else inter1 = t0.x + t * (t1.x - t0.x);
-            count++;
-        }
-        if (((t1.y <= y) && (t2.y > y)) || ((t2.y <= y) && (t1.y > y))) {
-            float t = (float)(y - t1.y) / (t2.y - t1.y);
-            if (count == 0) inter0 = t1.x + t * (t2.x - t1.x);
-            else inter1 = t1.x + t * (t2.x - t1.x);
-            count++;
-        }
-        if (((t2.y <= y) && (t0.y > y)) || ((t0.y <= y) && (t2.y > y))) {
-            float t = (float)(y - t2.y) / (t0.y - t2.y);
-            if (count == 0) inter0 = t2.x + t * (t0.x - t2.x);
-            else inter1 = t2.x + t * (t0.x - t2.x);
-            count++;
-        }
-
-        if (count >= 2) {
-            float draw_min = inter0; float draw_max = inter1;
-            if (draw_min > draw_max) { float tmp = draw_min; draw_min = draw_max; draw_max = tmp; }
-            SDL_RenderLine(renderer, draw_min, (float)y, draw_max, (float)y);
+void DestroyHandTextureAtlases(void) {
+    for (int i = 0; i < 3; i++) {
+        if (g_HandPipelineLayers[i].texture) {
+            SDL_DestroyTexture(g_HandPipelineLayers[i].texture);
+            g_HandPipelineLayers[i].texture = NULL;
         }
     }
-    SDL_RenderLine(renderer, base1_x, base1_y, tip_x, tip_y);
-    SDL_RenderLine(renderer, base2_x, base2_y, tip_x, tip_y);
-    SDL_RenderLine(renderer, base1_x, base1_y, base2_x, base2_y);
+    ResetAtlasPipelineScales();
 }
 
-/*
- * BakeClockHandsAtlases:
- * Renders all hand positions into VRAM strips exactly once on boot.
- */
-void BakeClockHandsAtlases(SDL_Renderer *renderer) {
-    hours_hand_atlas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, CLOCK_BOX_SIZE * 12, CLOCK_BOX_SIZE);
-    minutes_hand_atlas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, CLOCK_BOX_SIZE * 60, CLOCK_BOX_SIZE);
-    seconds_hand_atlas = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, CLOCK_BOX_SIZE * 60, CLOCK_BOX_SIZE);
+void InitHandTextureAtlases(SDL_Renderer *renderer) {
+    int pixel_w = 0, pixel_h = 0;
+    SDL_GetRenderOutputSize(renderer, &pixel_w, &pixel_h);
 
-    SDL_SetTextureScaleMode(hours_hand_atlas, SDL_SCALEMODE_NEAREST);
-    SDL_SetTextureScaleMode(minutes_hand_atlas, SDL_SCALEMODE_NEAREST);
-    SDL_SetTextureScaleMode(seconds_hand_atlas, SDL_SCALEMODE_NEAREST);
+    float actual_scale_x = (float)pixel_w / 150.0f;
+    float actual_scale_y = (float)pixel_h / 250.0f;
+    if (actual_scale_x <= 0.0f) actual_scale_x = 1.0f;
+    if (actual_scale_y <= 0.0f) actual_scale_y = 1.0f;
 
-    SDL_SetTextureBlendMode(hours_hand_atlas, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureBlendMode(minutes_hand_atlas, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureBlendMode(seconds_hand_atlas, SDL_BLENDMODE_BLEND);
+    g_CachedPipelineScaleX = actual_scale_x;
+    g_CachedPipelineScaleY = actual_scale_y;
 
-    float t_cx = CLOCK_BOX_SIZE / 2.0f; float t_cy = CLOCK_BOX_SIZE / 2.0f;
+    for (int hand_type = 0; hand_type < 3; hand_type++) {
+        AtlasPipelineLayer *layer = &g_HandPipelineLayers[hand_type];
 
-    SDL_SetRenderTarget(renderer, hours_hand_atlas);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    for (int h = 0; h < 12; h++) RasterizeTriangularHandToTarget(renderer, h * 30.0f, 17.5f, 9.5f, (h * CLOCK_BOX_SIZE) + t_cx, t_cy);
+        int scaled_slot_w = (int)ceilf(layer->base_cell_w * g_CachedPipelineScaleX);
+        int scaled_slot_h = (int)ceilf(layer->base_cell_h * g_CachedPipelineScaleY);
+        int total_sheet_w = scaled_slot_w * layer->total_frames;
+        int total_sheet_h = scaled_slot_h;
 
-    SDL_SetRenderTarget(renderer, minutes_hand_atlas);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    for (int m = 0; m < 60; m++) RasterizeTriangularHandToTarget(renderer, m * 6.0f, 27.5f, 8.5f, (m * CLOCK_BOX_SIZE) + t_cx, t_cy);
+        SDL_Surface *surface = SDL_CreateSurface(total_sheet_w, total_sheet_h, SDL_PIXELFORMAT_RGBA8888);
+        if (!surface) continue;
 
-    SDL_SetRenderTarget(renderer, seconds_hand_atlas);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    for (int s = 0; s < 60; s++) RasterizeTriangularHandToTarget(renderer, s * 6.0f, 30.0f, 1.5f, (s * CLOCK_BOX_SIZE) + t_cx, t_cy);
+        SDL_ClearSurface(surface, 0.0f, 0.0f, 0.0f, 0.0f);
+        SDL_Renderer *sw_renderer = SDL_CreateSoftwareRenderer(surface);
+        if (!sw_renderer) {
+            SDL_DestroySurface(surface);
+            continue;
+        }
 
-    SDL_SetRenderTarget(renderer, NULL);
+        float tip_len = 0.0f, base_width = 0.0f, back_ext = 0.0f;
+        if (hand_type == HAND_TYPE_HOUR) {
+            tip_len = 18.0f; base_width = 10.0f; back_ext = -6.0f;
+        } else if (hand_type == HAND_TYPE_MINUTE) {
+            tip_len = 28.0f; base_width = 7.5f; back_ext = -6.0f;
+        } else {
+            tip_len = 27.0f; base_width = 3.0f; back_ext = -12.0f;
+        }
+
+        float half_width = base_width / 2.0f;
+        int steps_count = layer->total_frames;
+
+        for (int step = 0; step < steps_count; step++) {
+            float angle_rad = ((float)step * (2.0f * M_PI / (float)steps_count)) - (M_PI / 2.0f);
+            float cos_a = cosf(angle_rad);
+            float sin_a = sinf(angle_rad);
+
+            float cx = ((float)step * scaled_slot_w) + (scaled_slot_w / 2.0f);
+            float cy = scaled_slot_h / 2.0f;
+
+            /* Elliptical projection math for the prolate spheroid clock face layout */
+            float vector_len = sqrtf(cos_a * cos_a * g_CachedPipelineScaleX * g_CachedPipelineScaleX +
+                                     sin_a * sin_a * g_CachedPipelineScaleY * g_CachedPipelineScaleY);
+            float true_cos = (cos_a * g_CachedPipelineScaleX) / vector_len;
+            float true_sin = (sin_a * g_CachedPipelineScaleY) / vector_len;
+
+            float tx = cx + (tip_len * true_cos * g_CachedPipelineScaleX);
+            float ty = cy + (tip_len * true_sin * g_CachedPipelineScaleY);
+            float bx = cx + (back_ext * true_cos * g_CachedPipelineScaleX);
+            float by = cy + (back_ext * true_sin * g_CachedPipelineScaleY);
+
+            /* Perfect, non-sheared isosceles base alignment calculations */
+            float dx = -true_sin * half_width * g_CachedPipelineScaleX;
+            float dy = true_cos * half_width * g_CachedPipelineScaleY;
+
+            SDL_Vertex vertices[3];
+
+            /* Vertex 0: Tip (Solid Black Vector Fill) */
+            vertices[0].position.x = tx; vertices[0].position.y = ty;
+            vertices[0].color.r = 0.0f; vertices[0].color.g = 0.0f; vertices[0].color.b = 0.0f; vertices[0].color.a = 1.0f;
+
+            /* Vertex 1: Base Left Corner Vertex */
+            vertices[1].position.x = bx - dx; vertices[1].position.y = by - dy;
+            vertices[1].color.r = 0.0f; vertices[1].color.g = 0.0f; vertices[1].color.b = 0.0f; vertices[1].color.a = 1.0f;
+
+            /* Vertex 2: Base Right Corner Vertex */
+            vertices[2].position.x = bx + dx; vertices[2].position.y = by + dy;
+            vertices[2].color.r = 0.0f; vertices[2].color.g = 0.0f; vertices[2].color.b = 0.0f; vertices[2].color.a = 1.0f;
+
+            SDL_RenderGeometry(sw_renderer, NULL, vertices, 3, NULL, 0);
+        }
+
+        SDL_DestroyRenderer(sw_renderer);
+        layer->texture = SDL_CreateTextureFromSurface(renderer, surface);
+        SDL_DestroySurface(surface);
+    }
+    g_PipelineAtlasesInitialized = 1;
 }
 
-void FreeClockHandsAtlases(void) {
-    if (hours_hand_atlas) SDL_DestroyTexture(hours_hand_atlas);
-    if (minutes_hand_atlas) SDL_DestroyTexture(minutes_hand_atlas);
-    if (seconds_hand_atlas) SDL_DestroyTexture(seconds_hand_atlas);
+void RenderBakedClockHandToPipeline(SDL_Renderer *renderer, int hand_type, int position_index) {
+    if (hand_type < 0 || hand_type > 2) return;
+
+    int pixel_w = 0, pixel_h = 0;
+    SDL_GetRenderOutputSize(renderer, &pixel_w, &pixel_h);
+    float currentScaleX = (float)pixel_w / 150.0f;
+    float currentScaleY = (float)pixel_h / 250.0f;
+
+    if (!g_PipelineAtlasesInitialized || currentScaleX != g_CachedPipelineScaleX || currentScaleY != g_CachedPipelineScaleY) {
+        DestroyHandTextureAtlases();
+        InitHandTextureAtlases(renderer);
+    }
+
+    AtlasPipelineLayer *layer = &g_HandPipelineLayers[hand_type];
+    if (!layer->texture) return;
+
+    int scaled_slot_w = (int)ceilf(layer->base_cell_w * g_CachedPipelineScaleX);
+    int scaled_slot_h = (int)ceilf(layer->base_cell_h * g_CachedPipelineScaleY);
+
+    int step_index = position_index;
+    if (step_index >= layer->total_frames) step_index = layer->total_frames - 1;
+    if (step_index < 0) step_index = 0;
+
+    SDL_FRect src_rect;
+    src_rect.x = (float)(step_index * scaled_slot_w);
+    src_rect.y = 0.0f;
+    src_rect.w = (float)scaled_slot_w;
+    src_rect.h = (float)scaled_slot_h;
+
+    SDL_FRect dst_rect;
+    dst_rect.x = 73.0f - ((float)layer->base_cell_w / 2.0f);
+    dst_rect.y = 150.0f - ((float)layer->base_cell_h / 2.0f);
+    dst_rect.w = (float)layer->base_cell_w;
+    dst_rect.h = (float)layer->base_cell_h;
+
+    SDL_RenderTexture(renderer, layer->texture, &src_rect, &dst_rect);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 }
 
 void DrawBakedClockHand(SDL_Renderer *renderer, int hand_type, int position_index) {
-    SDL_Texture *tex = (hand_type == 0) ? hours_hand_atlas : (hand_type == 1) ? minutes_hand_atlas : seconds_hand_atlas;
-    if (!tex) return;
-    SDL_FRect src = { (float)(position_index * CLOCK_BOX_SIZE), 0, CLOCK_BOX_SIZE, CLOCK_BOX_SIZE };
-    SDL_FRect dst = { CLOCK_CENTER_X - (CLOCK_BOX_SIZE / 2.0f), CLOCK_CENTER_Y - (CLOCK_BOX_SIZE / 2.0f), CLOCK_BOX_SIZE, CLOCK_BOX_SIZE };
-    SDL_RenderTexture(renderer, tex, &src, &dst);
+    int step_index = position_index;
+
+    if (hand_type == HAND_TYPE_HOUR) {
+        time_t raw_time = time(NULL);
+        struct tm *live_time = localtime(&raw_time);
+        int current_minute = (live_time) ? live_time->tm_min : 0;
+
+        /* Standard 12-hour translation mapping + minute fraction step positioning */
+        step_index = ((position_index % 12) * 5) + (current_minute / 12);
+    }
+
+    RenderBakedClockHandToPipeline(renderer, hand_type, step_index);
+}
+
+/* Framework Main Loop Linker Mappings */
+void BakeClockHandsAtlases(SDL_Renderer *renderer) {
+    InitHandTextureAtlases(renderer);
+}
+
+void FreeClockHandsAtlases(void) {
+    DestroyHandTextureAtlases();
 }

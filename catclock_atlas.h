@@ -22,4 +22,39 @@
  *
  * License: Open Source / Educational - Preserve attribution upon redistribution.
  *****************************************************************************/
- 
+
+#ifndef CATCLOCK_ATLAS_H
+#define CATCLOCK_ATLAS_H
+
+#include <SDL3/SDL.h>
+
+/* Asset Layer Typings */
+#define HAND_TYPE_HOUR    0
+#define HAND_TYPE_MINUTE  1
+#define HAND_TYPE_SECOND  2
+
+/* Generalized Scale-Aware Pre-Baked Texture Blueprint */
+typedef struct {
+    SDL_Texture *texture;
+    int total_frames;
+    int base_cell_w;
+    int base_cell_h;
+} AtlasPipelineLayer;
+
+/* Native Framework Architecture Pipeline Hooks */
+int CompareFloats(const void *a, const void *b);
+void DrawStaticAssetLayer(SDL_Renderer *renderer, int layer_id);
+void DrawPrebakedOutlineLayer(SDL_Renderer *renderer);
+SDL_HitTestResult WidgetWindowHitTestCallback(SDL_Window *win, const SDL_Point *area, void *data);
+
+/* Shared Abstract Texture Management Pipeline Interfaces */
+void ResetAtlasPipelineScales(void);
+void InitHandTextureAtlases(SDL_Renderer *renderer);
+void DestroyHandTextureAtlases(void);
+void RenderBakedClockHandToPipeline(SDL_Renderer *renderer, int hand_type, int position_index);
+
+/* Main Loop Linker Compatibility Remappings */
+void BakeClockHandsAtlases(SDL_Renderer *renderer);
+void FreeClockHandsAtlases(void);
+
+#endif /* CATCLOCK_ATLAS_H */
