@@ -32,11 +32,11 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $(TARGET) $(LIBS)
 
-%.o: %.c catclock_shared.h
+%.o: %.c catclock_shared.h catclock_atlas.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Pattern rule for cross-compilation objects
-%.win.o: %.c catclock_shared.h
+%.win.o: %.c catclock_shared.h catclock_atlas.h
 	$(WIN_CC) $(WIN_CFLAGS) -c $< -o $@
 
 # Prevent GNU Make from deleting resource.rc and your specific icon asset as intermediates

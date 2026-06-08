@@ -4,7 +4,7 @@
  *
  * Authorship & Collaboration:
  *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic 
+ *   - Core engine optimization, refactoring architecture, and porting logic
  *     engineered jointly to achieve production-grade performance.
  *
  * Attribution & Legacy:
@@ -24,6 +24,7 @@
  *****************************************************************************/
 
 #include "catclock_shared.h"
+#include "catclock_atlas.h"
 #include <string.h>
 
 #include "assets/catback.xbm"
@@ -48,15 +49,15 @@ int CompareFloats(const void *a, const void *b) {
  */
 SDL_HitTestResult WidgetWindowHitTestCallback(SDL_Window *win, const SDL_Point *area, void *data) {
     (void)data;
-    
+
     /* Instantly fallback to standard processing if the window has normal frames */
     if (use_window_decorations) {
         return SDL_HITTEST_NORMAL;
     }
-    
+
     int current_win_w = 150, current_win_h = 300;
     SDL_GetWindowSize(win, &current_win_w, &current_win_h);
-    
+
     if (area->x >= 0 && area->x <= current_win_w && area->y >= 0 && area->y <= current_win_h) {
         return SDL_HITTEST_DRAGGABLE;
     }

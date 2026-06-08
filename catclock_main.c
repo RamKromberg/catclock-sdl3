@@ -4,7 +4,7 @@
  *
  * Authorship & Collaboration:
  *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic 
+ *   - Core engine optimization, refactoring architecture, and porting logic
  *     engineered jointly to achieve production-grade performance.
  *
  * Attribution & Legacy:
@@ -42,8 +42,8 @@ float current_tail_angle = 0.0f;
 float pupil_translation_x = 0.0f;
 float eye_perspective_scale = 1.0f;
 bool show_second_hand = true;
-bool show_outline_border = true;      
-bool use_window_decorations = false;  
+bool show_outline_border = true;
+bool use_window_decorations = false;
 int target_fps_limit = 30;
 float window_scale_factor = 1.0f;
 
@@ -68,18 +68,18 @@ void SyncAnimationTime(void) {
 
     current_tail_angle = swing_phase * 34.0f;
     pupil_translation_x  = swing_phase * 6.0f;
-    eye_perspective_scale = 1.0f - (fabsf(swing_phase) * 0.4f); 
+    eye_perspective_scale = 1.0f - (fabsf(swing_phase) * 0.4f);
 }
 
 int main(int argc, char *argv[]) {
     bool always_on_top = true;
 
-    for (int i = 1; i < argc; i++) { 
+    for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             PrintHelpDocumentation(argv[0]);
             return 0;
         }
-        if (strcmp(argv[i], "-noseconds") == 0) show_second_hand = false; 
+        if (strcmp(argv[i], "-noseconds") == 0) show_second_hand = false;
         if (strcmp(argv[i], "-nooutline") == 0) show_outline_border = false;
         if (strcmp(argv[i], "-decorations") == 0) use_window_decorations = true;
         if (strcmp(argv[i], "-notop") == 0) always_on_top = false;
@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) return -1;
-    
+
     Uint64 window_flags = 0;
     if (!use_window_decorations) {
         window_flags = SDL_WINDOW_TRANSPARENT | SDL_WINDOW_BORDERLESS;
@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
 
     SDL_Window *window = SDL_CreateWindow("Kit-Cat Widget", 150, 300, window_flags);
     if (!window) return -1;
-    
+
     SDL_SetWindowAlwaysOnTop(window, always_on_top);
 
 #ifdef _WIN32
@@ -122,8 +122,8 @@ int main(int argc, char *argv[]) {
 
     SDL_Renderer *renderer = SDL_CreateRenderer(window, NULL);
     if (!renderer) return -1;
-    
-    SDL_SetRenderVSync(renderer, 0); 
+
+    SDL_SetRenderVSync(renderer, 0);
     InitPreflippedTextureAtlases(renderer);
     SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_STRETCH);
 
@@ -142,8 +142,8 @@ int main(int argc, char *argv[]) {
     while (system_execution) {
         Uint64 frame_start_ticks = SDL_GetTicks();
         SDL_Event runtime_event;
-        
-        while (SDL_PollEvent(&runtime_event)) { 
+
+        while (SDL_PollEvent(&runtime_event)) {
             if (runtime_event.type == SDL_EVENT_QUIT) system_execution = false;
             else if (runtime_event.type == SDL_EVENT_KEY_DOWN) {
                 if (runtime_event.key.key == SDLK_ESCAPE) system_execution = false;
@@ -152,7 +152,7 @@ int main(int argc, char *argv[]) {
             else if (runtime_event.type == SDL_EVENT_MOUSE_WHEEL) {
                 if (runtime_event.wheel.y > 0.0f) window_scale_factor += 0.1f;
                 else if (runtime_event.wheel.y < 0.0f) window_scale_factor -= 0.1f;
-                
+
                 if (window_scale_factor < 0.5f) window_scale_factor = 0.5f;
                 if (window_scale_factor > 4.0f) window_scale_factor = 4.0f;
 
@@ -194,14 +194,14 @@ int main(int argc, char *argv[]) {
         }
 
         RenderOriginalThickSwayingTail(renderer, TAIL_PIVOT_X, TAIL_PIVOT_Y, current_tail_angle, color_black, false);
-        DrawStaticAssetLayer(renderer, 0); 
-        DrawStaticAssetLayer(renderer, 1); 
+        DrawStaticAssetLayer(renderer, 0);
+        DrawStaticAssetLayer(renderer, 1);
         RenderAuthenticOriginalEyes(renderer, pupil_translation_x, eye_perspective_scale, color_black);
-        DrawStaticAssetLayer(renderer, 2); 
-        DrawStaticAssetLayer(renderer, 3); 
+        DrawStaticAssetLayer(renderer, 2);
+        DrawStaticAssetLayer(renderer, 3);
 
-        DrawBakedClockHand(renderer, 0, cached_hour_idx); 
-        DrawBakedClockHand(renderer, 1, cached_minute_idx); 
+        DrawBakedClockHand(renderer, 0, cached_hour_idx);
+        DrawBakedClockHand(renderer, 1, cached_minute_idx);
         if (show_second_hand) DrawBakedClockHand(renderer, 2, cached_second_idx);
 
         SDL_RenderPresent(renderer);

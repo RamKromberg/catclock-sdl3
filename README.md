@@ -23,6 +23,14 @@ Run the executable from the command line using the following syntax:
 * -notop — Disable the forced 'Always on Top' window layer pinning.
 * -fps [1-120] — Set a custom target frame rate pacing limit (Default: 30).
 
+## Linux / GNOME (Wayland) Note
+Due to security constraints in the native Wayland protocol, applications cannot programmatically force themselves to stay "Always on Top".
+
+If you want the clock pinned above other windows in GNOME:
+1. Click the clock window to focus it.
+2. Press **`Alt` + `Space`** to open the native window manager menu.
+3. Select **Always on Top**.
+
 ## 📋 Attribution & History
 
 * The Original: Inspired by the classic X11/Motif catclock program.

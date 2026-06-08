@@ -4,7 +4,7 @@
  *
  * Authorship & Collaboration:
  *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic 
+ *   - Core engine optimization, refactoring architecture, and porting logic
  *     engineered jointly to achieve production-grade performance.
  *
  * Attribution & Legacy:

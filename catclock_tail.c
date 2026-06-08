@@ -4,7 +4,7 @@
  *
  * Authorship & Collaboration:
  *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic 
+ *   - Core engine optimization, refactoring architecture, and porting logic
  *     engineered jointly to achieve production-grade performance.
  *
  * Attribution & Legacy:
@@ -28,16 +28,16 @@
 #define TAIL_VERTICES_COUNT 19
 
 static OriginalPoint original_repository_tail[] = {
-    { -9.0f, -10.0f }, { -9.0f,  20.0f }, {-10.5f,  40.0f }, {-11.5f,  55.0f }, 
-    { -9.0f,  68.0f }, {  0.0f,  78.0f }, { 11.0f,  76.0f }, { 18.0f,  68.0f }, 
-    { 20.0f,  54.0f }, { 16.5f,  44.0f }, {  9.0f,  42.0f }, {  4.5f,  50.0f }, 
-    {  8.5f,  62.0f }, {  3.0f,  68.0f }, { -2.0f,  62.0f }, { -1.0f,  45.0f }, 
+    { -9.0f, -10.0f }, { -9.0f,  20.0f }, {-10.5f,  40.0f }, {-11.5f,  55.0f },
+    { -9.0f,  68.0f }, {  0.0f,  78.0f }, { 11.0f,  76.0f }, { 18.0f,  68.0f },
+    { 20.0f,  54.0f }, { 16.5f,  44.0f }, {  9.0f,  42.0f }, {  4.5f,  50.0f },
+    {  8.5f,  62.0f }, {  3.0f,  68.0f }, { -2.0f,  62.0f }, { -1.0f,  45.0f },
     {  1.0f,  30.0f }, {  4.5f,  15.0f }, {  7.0f, -10.0f }
 };
 
 void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, float angle_deg, SDL_Color color, bool inflate_mode) {
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-    
+
     float rad = angle_deg * M_PI / 180.0f;
     float cos_a = cosf(rad);
     float sin_a = sinf(rad);
@@ -49,9 +49,9 @@ void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, 
         float rx = original_repository_tail[i].x;
         float ry = original_repository_tail[i].y;
 
-        /* 
+        /*
          * NORMAL VECTOR GEOMETRY INFLATION ENGINE:
-         * Calculates true perpendicular vectors for every segment joint. 
+         * Calculates true perpendicular vectors for every segment joint.
          * This forces the 1px white border to expand outward on concave curves,
          * resolving the missing inner-edge outline glitch at the tip.
          */
@@ -75,7 +75,7 @@ void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, 
             float nx = -(dy1 + dy2);
             float ny = (dx1 + dx2);
             float n_len = sqrtf(nx*nx + ny*ny);
-            
+
             if (n_len > 0.0f) {
                 /* Push the coordinates outward relative to the curve profile by exactly 1.2px */
                 rx += (nx / n_len) * 1.2f;
