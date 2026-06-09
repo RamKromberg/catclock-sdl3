@@ -69,6 +69,7 @@ bool show_second_hand = true;
 bool show_outline_border = true;
 bool use_window_decorations = false;
 int target_fps_limit = 30;
+int ssaa_factor = 2;
 float window_scale_factor = 1.0f;
 
 static Uint64 wall_clock_base_ms = 0;
@@ -83,6 +84,7 @@ static void PrintHelpDocumentation(const char *program_name) {
     printf("  -decorations    Restore standard desktop frame borders & window title-bars.\n");
     printf("  -notop          Disable the forced 'Always on Top' window layer pinning.\n");
     printf("  -fps [1-120]    Set a custom target frame rate pacing limit (Default: 30).\n");
+    printf("  -ssaa <factor>  Set sub-pixel super-sampling level (default: 2, use 1 to disable).\n");
 }
 
 void SyncAnimationTime(void) {
@@ -103,6 +105,10 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "-nooutline") == 0) show_outline_border = false;
         if (strcmp(argv[i], "-decorations") == 0) use_window_decorations = true;
         if (strcmp(argv[i], "-notop") == 0) always_on_top = false;
+        if (strcmp(argv[i], "-ssaa") == 0 && (i + 1) < argc) {
+            ssaa_factor = SDL_atoi(argv[++i]);
+            if (ssaa_factor < 1) ssaa_factor = 1;
+        }
         if (strcmp(argv[i], "-fps") == 0 && (i + 1) < argc) {
             target_fps_limit = atoi(argv[i + 1]);
             if (target_fps_limit < 1) target_fps_limit = 1;
