@@ -38,7 +38,7 @@ static OriginalPoint original_repository_tail[] = {
 void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, float angle_deg, SDL_Color color, bool inflate_mode) {
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
 
-    float rad = angle_deg * M_PI / 180.0f;
+    float rad = angle_deg * 34.0f * M_PI / 180.0f;
     float cos_a = cosf(rad);
     float sin_a = sinf(rad);
 

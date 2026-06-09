@@ -73,7 +73,7 @@ void FreeClockHandsAtlases(void);
 void DrawBakedClockHand(SDL_Renderer *renderer, int hand_type, int position_index);
 
 void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, float angle_deg, SDL_Color color, bool inflate_mode);
-void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float translation_x, float scale_factor, SDL_Color color);
+void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float swing_phase, SDL_Color color);
 
 SDL_HitTestResult WidgetWindowHitTestCallback(SDL_Window *win, const SDL_Point *area, void *data);
 

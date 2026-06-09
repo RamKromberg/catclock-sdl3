@@ -62,6 +62,7 @@ extern bool REBUILD_pre_rendered_60phase_atlas(SDL_Renderer *renderer, CatClockH
 extern void RUNTIME_blit_pre_rendered_hands(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, float center_x, float center_y, int hour_val, int minute_val, int second_val);
 
 float current_tail_angle = 0.0f;
+float swing_phase = 0.0f;
 float pupil_translation_x = 0.0f;
 float eye_perspective_scale = 1.0f;
 bool show_second_hand = true;
@@ -87,11 +88,7 @@ static void PrintHelpDocumentation(const char *program_name) {
 void SyncAnimationTime(void) {
     Uint64 milliseconds = SDL_GetTicks();
     float total_seconds = (float)milliseconds / 1000.0f;
-    float swing_phase = cosf(total_seconds * M_PI);
-
-    current_tail_angle = swing_phase * 34.0f;
-    pupil_translation_x  = swing_phase * 6.0f;
-    eye_perspective_scale = 1.0f - (fabsf(swing_phase) * 0.4f);
+    swing_phase = cosf(total_seconds * M_PI);
 }
 
 int main(int argc, char *argv[]) {
@@ -221,13 +218,13 @@ int main(int argc, char *argv[]) {
 
         if (show_outline_border && !use_window_decorations) {
             DrawPrebakedOutlineLayer(renderer);
-            RenderOriginalThickSwayingTail(renderer, TAIL_PIVOT_X, TAIL_PIVOT_Y, current_tail_angle, color_white, true);
+            RenderOriginalThickSwayingTail(renderer, TAIL_PIVOT_X, TAIL_PIVOT_Y, swing_phase, color_white, true);
         }
 
-        RenderOriginalThickSwayingTail(renderer, TAIL_PIVOT_X, TAIL_PIVOT_Y, current_tail_angle, color_black, false);
+        RenderOriginalThickSwayingTail(renderer, TAIL_PIVOT_X, TAIL_PIVOT_Y, swing_phase, color_black, false);
         DrawStaticAssetLayer(renderer, 0);
         DrawStaticAssetLayer(renderer, 1);
-        RenderAuthenticOriginalEyes(renderer, pupil_translation_x, eye_perspective_scale, color_black);
+        RenderAuthenticOriginalEyes(renderer, swing_phase, color_black);
         DrawStaticAssetLayer(renderer, 2);
         DrawStaticAssetLayer(renderer, 3);
 

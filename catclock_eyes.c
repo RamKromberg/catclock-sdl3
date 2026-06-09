@@ -27,8 +27,10 @@
 
 #define RESOLUTION_VERTICES 32
 
-void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float translation_x, float scale_factor, SDL_Color color) {
+void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float swing_phase, SDL_Color color) {
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+    float translation_x = swing_phase * 6.0f;
+    float scale_factor = 1.0f - (fabsf(swing_phase) * 0.4f);
     float target_centers[] = { LEFT_EYE_AXIS_X, RIGHT_EYE_AXIS_X };
 
     float base_radius_x = 3.5f;
