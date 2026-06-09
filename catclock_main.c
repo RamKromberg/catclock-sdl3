@@ -27,6 +27,8 @@
 #include <time.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
+#include <malloc.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -37,6 +39,27 @@ static struct tm* _X64_or_X86_struct_tm_fallback(const time_t* timer) {
     return &result;
 }
 #endif
+
+#ifndef _WIN32
+#include <malloc.h> // Required for native kernel-level heap truncation hooks
+#endif
+
+static Uint64 g_last_cleanup_trigger_ticks = 0;
+static bool g_cleanup_timer_active = false;
+
+#define PHASES_PER_HAND 60
+typedef struct {
+    SDL_Texture *atlas_texture;
+    int frame_w;
+    int frame_h;
+    SDL_FRect hour_src_rects[PHASES_PER_HAND];
+    SDL_FRect minute_src_rects[PHASES_PER_HAND];
+    SDL_FRect second_src_rects[PHASES_PER_HAND];
+} CatClockHardwareAtlas;
+
+extern CatClockHardwareAtlas g_hands_atlas;
+extern bool REBUILD_pre_rendered_60phase_atlas(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, int hand_w, int hand_h);
+extern void RUNTIME_blit_pre_rendered_hands(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, float center_x, float center_y, int hour_val, int minute_val, int second_val);
 
 float current_tail_angle = 0.0f;
 float pupil_translation_x = 0.0f;
@@ -127,6 +150,10 @@ int main(int argc, char *argv[]) {
     InitPreflippedTextureAtlases(renderer);
     SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_STRETCH);
 
+    // BASELINE HOOK: Arm the countdown timer immediately upon starting the app
+    g_last_cleanup_trigger_ticks = SDL_GetTicks();
+
+    g_cleanup_timer_active = true;
     SDL_Color color_black = {0, 0, 0, 255};
     SDL_Color color_white = {255, 255, 255, 255};
     bool system_execution = true;
@@ -148,7 +175,7 @@ int main(int argc, char *argv[]) {
             else if (runtime_event.type == SDL_EVENT_KEY_DOWN) {
                 if (runtime_event.key.key == SDLK_ESCAPE) system_execution = false;
             }
-            /* FIXED: Completely removed manual mouse dragging variables from the loop */
+            // --- INSIDE YOUR catclock_main.c EVENT POLLING LOOP ---
             else if (runtime_event.type == SDL_EVENT_MOUSE_WHEEL) {
                 if (runtime_event.wheel.y > 0.0f) window_scale_factor += 0.1f;
                 else if (runtime_event.wheel.y < 0.0f) window_scale_factor -= 0.1f;
@@ -157,7 +184,11 @@ int main(int argc, char *argv[]) {
                 if (window_scale_factor > 4.0f) window_scale_factor = 4.0f;
 
                 SDL_SetWindowSize(window, (int)(150.0f * window_scale_factor), (int)(300.0f * window_scale_factor));
+
+                // Keep your working, sharp synchronous renderer call right here!
+                InitPreflippedTextureAtlases(renderer);
             }
+
         }
 
         SyncAnimationTime();
@@ -200,20 +231,41 @@ int main(int argc, char *argv[]) {
         DrawStaticAssetLayer(renderer, 2);
         DrawStaticAssetLayer(renderer, 3);
 
-        DrawBakedClockHand(renderer, 0, cached_hour_idx);
-        DrawBakedClockHand(renderer, 1, cached_minute_idx);
-        if (show_second_hand) DrawBakedClockHand(renderer, 2, cached_second_idx);
+        // --- INSIDE YOUR MAIN LOOP INTERIOR HANDS RENDERING ROW ---
+        time_t raw_time = time(NULL);
+        struct tm *time_info = localtime(&raw_time);
+
+        int hour_phase   = ((time_info->tm_hour % 12) * 5) + (time_info->tm_min / 12);
+        int minute_phase = time_info->tm_min;
+        int second_phase = time_info->tm_sec;
+
+        // Query the live logical composition limits to compute resolution-independent sizing rectangles
+        SDL_FRect runtime_logical_rect = { 0.0f, 0.0f, 150.0f, 300.0f };
+        SDL_GetRenderLogicalPresentationRect(renderer, &runtime_logical_rect);
+
+        RUNTIME_blit_pre_rendered_hands(
+            renderer,
+            &g_hands_atlas,
+            73.0f,   // Verified center X position
+            150.0f,  // Verified center Y position
+            hour_phase,
+            minute_phase,
+            show_second_hand ? second_phase : 0
+        );
 
         SDL_RenderPresent(renderer);
 
-        Uint64 target_frame_rate_ms = 1000 / target_fps_limit;
-        Uint64 frame_elapsed_time = SDL_GetTicks() - frame_start_ticks;
-        if (frame_elapsed_time < target_frame_rate_ms) {
-            SDL_Delay((Uint32)(target_frame_rate_ms - frame_elapsed_time));
+        Uint64 frame_end_ticks = SDL_GetTicks();
+        Uint64 frame_duration = frame_end_ticks - frame_start_ticks;
+        Uint64 target_duration = 1000 / target_fps_limit;
+        if (frame_duration < target_duration) {
+            SDL_Delay((Uint32)(target_duration - frame_duration));
         }
     }
 
     FreePreflippedTextureAtlases();
-    SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit();
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
 }

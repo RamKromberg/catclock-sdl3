@@ -32,6 +32,20 @@
 #include "assets/cattie.xbm"
 #include "assets/eyes.xbm"
 
+#define PHASES_PER_HAND 60
+typedef struct {
+    SDL_Texture *atlas_texture;
+    int frame_w;
+    int frame_h;
+    SDL_FRect hour_src_rects[PHASES_PER_HAND];
+    SDL_FRect minute_src_rects[PHASES_PER_HAND];
+    SDL_FRect second_src_rects[PHASES_PER_HAND];
+} CatClockHardwareAtlas;
+
+extern CatClockHardwareAtlas g_hands_atlas;
+extern bool REBUILD_pre_rendered_60phase_atlas(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, int hand_w, int hand_h);
+extern void destroy_clock_hands_atlas(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas);
+
 static SDL_Texture *assets_layer0 = NULL;
 static SDL_Texture *assets_layer1 = NULL;
 static SDL_Texture *assets_layer2 = NULL;
@@ -82,29 +96,56 @@ static SDL_Texture *ConvertXBMOntoTexture(SDL_Renderer *renderer, int w, int h, 
     return tex;
 }
 
+
+// --- INSIDE YOUR catclock_atlas.c FILE ---
 void InitPreflippedTextureAtlases(SDL_Renderer *renderer) {
-    BakeClockHandsAtlases(renderer);
+    extern float window_scale_factor;
+
+    // --- CRITICAL MEMORY PATCH: Safely release all stale texture resources ---
+    // This allows virtual memory allocations to contract smoothly in htop when scaling down
+    if (assets_layer0)     { SDL_DestroyTexture(assets_layer0);     assets_layer0 = NULL; }
+    if (assets_layer1)     { SDL_DestroyTexture(assets_layer1);     assets_layer1 = NULL; }
+    if (assets_layer2)     { SDL_DestroyTexture(assets_layer2);     assets_layer2 = NULL; }
+    if (assets_layer3)     { SDL_DestroyTexture(assets_layer3);     assets_layer3 = NULL; }
+    if (assets_layer_halo) { SDL_DestroyTexture(assets_layer_halo); assets_layer_halo = NULL; }
+
+    // Calculate the actual pixel density width rather than using a hardcoded small cell bounds
+    int computed_hand_w = (int)(150.0f * window_scale_factor);
+    int computed_hand_h = computed_hand_w;
+
+    // Pass the true physical scaling limit directly to your hardware texturing sheet
+    REBUILD_pre_rendered_60phase_atlas(renderer, &g_hands_atlas, computed_hand_w, computed_hand_h);
+
+    // Remaining ConvertXBMOntoTexture configurations continue exactly as before...
     assets_layer0 = ConvertXBMOntoTexture(renderer, catback_width, catback_height, (const unsigned char *)catback_bits);
     assets_layer1 = ConvertXBMOntoTexture(renderer, catwhite_width, catwhite_height, (const unsigned char *)catwhite_bits);
     assets_layer2 = ConvertXBMOntoTexture(renderer, eyes_width, eyes_height, (const unsigned char *)eyes_bits);
     assets_layer3 = ConvertXBMOntoTexture(renderer, cattie_width, cattie_height, (const unsigned char *)cattie_bits);
 
+    // --- PRESERVED UNTOUCHED PROCEDURAL HALO GENERATION ENGINE ---
     assets_layer_halo = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, 150, 300);
     if (assets_layer_halo && assets_layer0) {
         SDL_SetTextureScaleMode(assets_layer_halo, SDL_SCALEMODE_NEAREST);
         SDL_SetTextureBlendMode(assets_layer_halo, SDL_BLENDMODE_NONE);
         SDL_SetRenderTarget(renderer, assets_layer_halo);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+
         SDL_SetTextureColorMod(assets_layer0, 255, 255, 255);
         SDL_FRect offsets[] = { {-1,0,150,300}, {1,0,150,300}, {0,-1,150,300}, {0,1,150,300} };
-        for (int i = 0; i < 4; i++) SDL_RenderTexture(renderer, assets_layer0, NULL, &offsets[i]);
+        for (int i = 0; i < 4; i++) {
+            SDL_RenderTexture(renderer, assets_layer0, NULL, &offsets[i]);
+        }
+
+        // Decouple the render target cleanly back to the native display frame buffer
         SDL_SetRenderTarget(renderer, NULL);
         SDL_SetTextureBlendMode(assets_layer_halo, SDL_BLENDMODE_BLEND);
     }
 }
 
 void FreePreflippedTextureAtlases(void) {
-    FreeClockHandsAtlases();
+    destroy_clock_hands_atlas(NULL, &g_hands_atlas);
+
     if (assets_layer0) SDL_DestroyTexture(assets_layer0);
     if (assets_layer1) SDL_DestroyTexture(assets_layer1);
     if (assets_layer2) SDL_DestroyTexture(assets_layer2);
