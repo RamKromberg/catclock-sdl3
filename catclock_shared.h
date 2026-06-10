@@ -1,80 +1,77 @@
-/******************************************************************************
- * File Name:    catclock_shared.h
- * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
- *
- * Authorship & Collaboration:
- *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic
- *     engineered jointly to achieve production-grade performance.
- *
- * Attribution & Legacy:
- *   - Inspired by the classic X11/Motif 'catclock' original program.
- *   - XBM Graphic Assets derived from the historical open-source X11 layout.
- *
- * Engineering Milestones & Refactoring Pass (2026):
- *   - Ported natively to the SDL3 framework with desktop compositing support.
- *   - Designed a low-CPU runtime architecture utilizing pre-baked texture atlases.
- *   - Implemented 1-bit binary threshold rendering to optimize alpha blending.
- *   - Restored polygon scanline rasterization engines to patch geometry gaps.
- *   - Synchronized monotonic ticks with the wall clock to erase frame jitter.
- *   - Enabled adaptive pacing, focus-aware kernel sleeps, and zero-VSync spinlocks.
- *   - Added borderless transparent windows, OS-level hit-tests, and sharp nearest-pixel art integer scaling.
- *
- * License: Open Source / Educational - Preserve attribution upon redistribution.
- *****************************************************************************/
-
+/* ==========================================================================
+   FILE: catclock_shared.h (Extended Tracker context Profile)
+   ========================================================================== */
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
 #include <SDL3/SDL.h>
-#include <stdlib.h>
-#include <math.h>
+#include <stdbool.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-/* GIMP Extraction Coordinates */
-#define CLOCK_CENTER_X  74.0f
-#define CLOCK_CENTER_Y  150.0f
-#define EYES_MASK_DX    49.0f
-#define EYES_MASK_DY    30.0f
-#define TAIL_PIVOT_X    74.0f
-#define TAIL_PIVOT_Y    210.5f
-#define LEFT_EYE_AXIS_X   60.0f
-#define RIGHT_EYE_AXIS_X  91.0f
-#define EYE_AXIS_Y        41.0f
-#define CLOCK_BOX_SIZE 64
+#define BASELINE_CANVAS_W 150.0f
+#define BASELINE_CANVAS_H 300.0f
+#define CYCLE_PERIOD_MS 2000
+
+#define TOTAL_PHASES 60
 
 typedef struct {
-    float x, y;
+    SDL_Texture* atlas_texture;
+    SDL_FRect hour_src_rects[TOTAL_PHASES];
+    SDL_FRect minute_src_rects[TOTAL_PHASES];
+    SDL_FRect second_src_rects[TOTAL_PHASES];
+    float last_scale;
+    int cell_w;
+    int cell_h;
+} PreFlippedAtlas;
+
+typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
+
+typedef struct {
+    float x;
+    float y;
 } OriginalPoint;
 
-/* Shared State Variable Flags */
-extern float current_tail_angle;
-extern float pupil_translation_x;
-extern float eye_perspective_scale;
-extern bool show_second_hand;
-extern bool show_outline_border;
-extern bool use_window_decorations;
+/* Central Tracking Structure */
+typedef struct {
+    int current_win_w;
+    int current_win_h;
+    int current_ssaa_factor;
+    float current_scale;
+    bool is_window_minimized;
+    bool texture_cache_stale;
+    SDL_Color fg_color;
+    SDL_Color bg_color;
+    PreFlippedAtlas hands_atlas_meta;
+    CatClock_XbmLibrary *xbm_lib;
+    SDL_Texture *master_composite_layer;
+    SDL_Texture *halo_layer; /* Added: Persistent offscreen hardware cache pointer target */
+} CatClock_AppContext;
+
+extern int ssaa_factor;
 extern int target_fps_limit;
-extern float window_scale_factor;
 
-/* Unified Atlas Interfaces */
 int CompareFloats(const void *a, const void *b);
-void InitPreflippedTextureAtlases(SDL_Renderer *renderer);
-void FreePreflippedTextureAtlases(void);
-void DrawStaticAssetLayer(SDL_Renderer *renderer, int layer_id);
-void DrawPrebakedOutlineLayer(SDL_Renderer *renderer);
+void CatClock_OnWindowResize(SDL_WindowEvent *resize_event, CatClock_AppContext *ctx, SDL_Renderer *renderer);
+void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppContext *ctx, float sway_deg, int hour_phase, int minute_phase, int second_phase);
 
-/* Hand Baking Architecture Interfaces */
-void BakeClockHandsAtlases(SDL_Renderer *renderer);
-void FreeClockHandsAtlases(void);
-void DrawBakedClockHand(SDL_Renderer *renderer, int hand_type, int position_index);
+/* XBM Downstream Components Inter-op Spec */
+CatClock_XbmLibrary *CatClock_InitXbmLibrary(SDL_Renderer *renderer);
+void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary *lib);
+void CatClock_RebakeXbmTextures(SDL_Renderer *renderer, CatClock_XbmLibrary *lib);
+void CatClock_RenderXbmLayer(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, const char *layer_id, SDL_Color color);
+
+/* Rendering Modules */
+void REBUILD_pre_rendered_60phase_atlas(SDL_Renderer* renderer, PreFlippedAtlas* atlas, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+void RUNTIME_blit_pre_rendered_hands(SDL_Renderer* renderer, PreFlippedAtlas* atlas, float centerX, float centerY, int hour, int minute, int second);
+void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, SDL_Color color);
 
 void RenderOriginalThickSwayingTail(SDL_Renderer *renderer, float cx, float cy, float angle_deg, SDL_Color color, bool inflate_mode);
-void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float swing_phase, SDL_Color color);
 
-SDL_HitTestResult WidgetWindowHitTestCallback(SDL_Window *win, const SDL_Point *area, void *data);
+void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, const char *layer_id, SDL_Color color, float offset_x, float offset_y);
 
-#endif
+void CatClock_DestroyEyesPipeline(void);
+
+#endif /* CATCLOCK_SHARED_H */

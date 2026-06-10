@@ -1,184 +1,170 @@
-/******************************************************************************
- * File Name:    catclock_eyes.c
- * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
- *
- * Authorship & Collaboration:
- *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic
- *     engineered jointly to achieve production-grade performance.
- *
- * Attribution & Legacy:
- *   - Inspired by the classic X11/Motif 'catclock' original program.
- *   - XBM Graphic Assets derived from the historical open-source X11 layout.
- *
- * Engineering Milestones & Refactoring Pass (2026):
- *   - Ported natively to the SDL3 framework with desktop compositing support.
- *   - Designed a low-CPU runtime architecture utilizing pre-baked texture atlases.
- *   - Implemented 1-bit binary threshold rendering to optimize alpha blending.
- *   - Restored polygon scanline rasterization engines to patch geometry gaps.
- *   - Synchronized monotonic ticks with the wall clock to erase frame jitter.
- *   - Enabled adaptive pacing, focus-aware kernel sleeps, and zero-VSync spinlocks.
- *   - Added borderless transparent windows, OS-level hit-tests, and sharp nearest-pixel art integer scaling.
- *
- * License: Open Source / Educational - Preserve attribution upon redistribution.
- *****************************************************************************/
-
+#include "catclock_shared.h"
 #include <SDL3/SDL.h>
 #include <math.h>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-#define BASELINE_CANVAS_W 150.0f
-#define BASELINE_CANVAS_H 300.0f
-#define TOTAL_PHASE_SLOTS 30
-#define CYCLE_PERIOD_MS   2000
-#define ATLAS_COLS        6
-#define ATLAS_ROWS        5
-
-static SDL_Texture *g_AtlasSheetTexture    = NULL;
-static int          g_CachedWindowWidth    = 0;
-static int          g_CachedWindowHeight   = 0;
-static int          g_CachedSSAAFactor     = 0;
-static SDL_Color    g_CachedTextureColor   = {0, 0, 0, 0};
+#define BASE_EYE_CELL_DIM 24.0f
+static const int EYES_MATRIX_COLS = 10;
+#define CYCLE_PERIOD_MS 2000
 
 extern int target_fps_limit;
-extern int ssaa_factor;
 
-static void FillEllipse(SDL_Renderer *renderer, float cx, float cy, float rx, float ry, SDL_Color color) {
+typedef struct {
+    SDL_Texture *atlas_texture;
+    SDL_FRect *look_src_rects;
+    int allocated_frames;
+    float last_cached_scale;
+} CatClock_EyesInternalState;
+
+static CatClock_EyesInternalState g_EyesState = { NULL, NULL, 0, 0.0f };
+
+static void LowLevel_DrawSpecializedPupil(SDL_Renderer *renderer, float cx, float cy, float scale, float phase_ratio, SDL_Color color) {
+    /* ------------------------------------------------------------- */
+    /* CALIBRATED PUPIL GEOMETRY AND MOVEMENT VARIABLES              */
+    /* ------------------------------------------------------------- */
+    float base_w       = 2.5f * scale;
+    float base_h       = 10.5f * scale;
+    float max_offset_x = 7.0f * scale;
+
+    float local_shift_x = 0.0f * scale;
+    float local_shift_y = 0.0f * scale;
+    /* ------------------------------------------------------------- */
+
+    float swing_angle = phase_ratio * 2.0f * M_PI;
+    float look_x = sinf(swing_angle);
+
+    float ox = (look_x * max_offset_x) + local_shift_x;
+    float oy = 0.0f + local_shift_y;
+
+    float compression = sqrtf(fmaxf(0.1f, 1.0f - (look_x * look_x * 0.45f)));
+    float pup_w = base_w * compression;
+    float pup_h = base_h;
+
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-    for (float y = -ry; y <= ry; y += 0.5f) {
-        float dx = rx * sqrtf(1.0f - (y * y) / (ry * ry));
-        SDL_RenderLine(renderer, cx - dx, cy + y, cx + dx, cy + y);
+
+    int start_y = (int)floorf(cy + oy - pup_h);
+    int end_y = (int)ceilf(cy + oy + pup_h);
+
+    for (int y = start_y; y <= end_y; y++) {
+        float dy = (float)y - (cy + oy);
+        float h_ratio = dy / pup_h;
+        float width_factor = fmaxf(0.0f, 1.0f - (h_ratio * h_ratio));
+        float width_at_y = pup_w * sqrtf(width_factor);
+
+        SDL_RenderLine(renderer, cx + ox - width_at_y, (float)y, cx + ox + width_at_y, (float)y);
     }
 }
 
-static void ReBakeHardwareAtlasCache(SDL_Renderer *renderer, int win_w, int win_h, int current_ssaa, SDL_Color color) {
-    if (g_AtlasSheetTexture) {
-        SDL_DestroyTexture(g_AtlasSheetTexture);
-        g_AtlasSheetTexture = NULL;
-    }
+static void REBUILD_pre_rendered_eyes_atlas(SDL_Renderer *renderer, float current_scale) {
+    int required_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
 
-    g_CachedWindowWidth  = win_w;
-    g_CachedWindowHeight = win_h;
-    g_CachedSSAAFactor   = current_ssaa;
-    g_CachedTextureColor = color;
+    if (g_EyesState.atlas_texture) SDL_DestroyTexture(g_EyesState.atlas_texture);
+    if (g_EyesState.look_src_rects) SDL_free(g_EyesState.look_src_rects);
 
-    int ssaa_win_w = win_w * current_ssaa;
-    int ssaa_win_h = win_h * current_ssaa;
+    g_EyesState.look_src_rects = (SDL_FRect *)SDL_malloc(sizeof(SDL_FRect) * required_frames);
+    if (!g_EyesState.look_src_rects) return;
 
-    int atlas_w = ssaa_win_w * ATLAS_COLS;
-    int atlas_h = ssaa_win_h * ATLAS_ROWS;
+    g_EyesState.allocated_frames = required_frames;
+    g_EyesState.last_cached_scale = current_scale;
 
-    g_AtlasSheetTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, atlas_w, atlas_h);
-    if (!g_AtlasSheetTexture) {
-        return;
-    }
+    int cell_w = (int)ceilf(BASE_EYE_CELL_DIM * current_scale);
+    int cell_h = (int)ceilf(BASE_EYE_CELL_DIM * current_scale);
+    int cols = EYES_MATRIX_COLS;
+    int rows = (required_frames + cols - 1) / cols;
+    int atlas_w = cols * cell_w;
+    int atlas_h = rows * cell_h;
 
-    SDL_SetTextureScaleMode(g_AtlasSheetTexture, SDL_SCALEMODE_LINEAR);
-    SDL_SetTextureBlendMode(g_AtlasSheetTexture, SDL_BLENDMODE_BLEND);
+    g_EyesState.atlas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, atlas_w, atlas_h);
 
-    SDL_Texture *previous_target = SDL_GetRenderTarget(renderer);
-    SDL_Rect previous_viewport;
-    SDL_GetRenderViewport(renderer, &previous_viewport);
+    if (!g_EyesState.atlas_texture) return;
 
-    SDL_SetRenderTarget(renderer, g_AtlasSheetTexture);
+    SDL_SetTextureBlendMode(g_EyesState.atlas_texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(g_EyesState.atlas_texture, SDL_SCALEMODE_LINEAR);
+
+    SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
+    float old_scale_x = 0.0f, old_scale_y = 0.0f;
+    SDL_GetRenderScale(renderer, &old_scale_x, &old_scale_y);
+
+    SDL_SetRenderTarget(renderer, g_EyesState.atlas_texture);
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    float scale_x = (float)ssaa_win_w / BASELINE_CANVAS_W;
-    float scale_y = (float)ssaa_win_h / BASELINE_CANVAS_H;
-    float current_scale = (scale_x < scale_y) ? scale_x : scale_y;
+    SDL_Color pupil_color = { 0, 0, 0, 255 };
+    for (int i = 0; i < required_frames; i++) {
+        int cell_x = (i % cols) * cell_w;
+        int cell_y = (i / cols) * cell_h;
 
-    float origin_x = (float)(ssaa_win_w - (BASELINE_CANVAS_W * current_scale)) / 2.0f;
-    float origin_y = (float)(ssaa_win_h - (BASELINE_CANVAS_H * current_scale)) / 2.0f;
+        g_EyesState.look_src_rects[i] = (SDL_FRect){ (float)cell_x, (float)cell_y, (float)cell_w, (float)cell_h };
 
-    for (int i = 0; i < TOTAL_PHASE_SLOTS; i++) {
-        int col = i % ATLAS_COLS;
-        int row = i / ATLAS_COLS;
+        SDL_Rect cell_viewport = { cell_x, cell_y, cell_w, cell_h };
+        SDL_SetRenderViewport(renderer, &cell_viewport);
 
-        SDL_Rect frame_viewport = { col * ssaa_win_w, row * ssaa_win_h, ssaa_win_w, ssaa_win_h };
-        SDL_SetRenderViewport(renderer, &frame_viewport);
+        /*
+         * FIXING CENTER OFFSET SCALING MISMAPPING:
+         * Shift the local drawing midpoint metrics to absolute integers (12.0f).
+         * This pins the vector generation line layout loops safely inside
+         * the bounding limits of the 24-pixel layout grid target blocks.
+         */
+        float local_cx = (float)(int)(cell_w / 2);
+        float local_cy = (float)(int)(cell_h / 2);
+        float phase_ratio = (float)i / (float)required_frames;
 
-        float phase_angle = ((float)i / (float)TOTAL_PHASE_SLOTS) * (2.0f * (float)M_PI);
-        float swing_factor = sinf(phase_angle);
-
-        float offset_x = swing_factor * (7.5f * current_scale);
-        float proximity = fabsf(offset_x) / (7.5f * current_scale);
-
-        float compression_x = 1.0f - (0.12f * proximity);
-        float compression_y = 1.0f - (0.07f * proximity);
-
-        float rx = (3.5f * current_scale) * compression_x;
-        float ry = (10.25f * current_scale) * compression_y;
-
-        float left_cx  = origin_x + (60.0f * current_scale) + offset_x;
-        float right_cx = origin_x + (92.0f * current_scale) + offset_x;
-        float cy       = origin_y + (41.0f * current_scale);
-
-        FillEllipse(renderer, left_cx, cy, rx, ry, color);
-        FillEllipse(renderer, right_cx, cy, rx, ry, color);
+        LowLevel_DrawSpecializedPupil(renderer, local_cx, local_cy, current_scale, phase_ratio, pupil_color);
     }
 
-    SDL_SetRenderTarget(renderer, previous_target);
-    SDL_SetRenderViewport(renderer, &previous_viewport);
+    SDL_SetRenderViewport(renderer, NULL);
+    SDL_SetRenderTarget(renderer, old_target);
+    SDL_SetRenderScale(renderer, old_scale_x, old_scale_y);
 }
 
-void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, float swing_phase, SDL_Color color) {
-    (void)swing_phase;
+void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, SDL_Color color) {
+    int output_w = 0, output_h = 0;
+    bool rgos = SDL_GetRenderOutputSize(renderer, &output_w, &output_h);
+    if (!rgos || output_w <= 0) output_w = 150;
 
-    int win_w = 0;
-    int win_h = 0;
-    SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
+    float current_scale = (float)output_w / 150.0f;
+    int required_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
 
-    int active_ssaa = (ssaa_factor > 0) ? ssaa_factor : 2;
-
-    int color_changed = (color.r != g_CachedTextureColor.r || color.g != g_CachedTextureColor.g ||
-                         color.b != g_CachedTextureColor.b || color.a != g_CachedTextureColor.a);
-
-    if (!g_AtlasSheetTexture || win_w != g_CachedWindowWidth || win_h != g_CachedWindowHeight ||
-        active_ssaa != g_CachedSSAAFactor || color_changed) {
-        ReBakeHardwareAtlasCache(renderer, win_w, win_h, active_ssaa, color);
+    if (!g_EyesState.atlas_texture || !g_EyesState.look_src_rects || g_EyesState.last_cached_scale != current_scale || g_EyesState.allocated_frames != required_frames) {
+        REBUILD_pre_rendered_eyes_atlas(renderer, current_scale);
     }
 
-    if (!g_AtlasSheetTexture) {
+    if (!g_EyesState.atlas_texture || !g_EyesState.look_src_rects || g_EyesState.allocated_frames <= 0) {
         return;
     }
 
-    int phase_index = (int)((SDL_GetTicks() % CYCLE_PERIOD_MS) * TOTAL_PHASE_SLOTS / CYCLE_PERIOD_MS);
-    if (phase_index >= TOTAL_PHASE_SLOTS) {
-        phase_index = TOTAL_PHASE_SLOTS - 1;
-    }
+    uint64_t current_ticks = SDL_GetTicks();
+    int frame_index = (int)(((current_ticks % CYCLE_PERIOD_MS) * (uint64_t)g_EyesState.allocated_frames) / CYCLE_PERIOD_MS);
+    if (frame_index >= g_EyesState.allocated_frames) frame_index = g_EyesState.allocated_frames - 1;
 
-    int col = phase_index % ATLAS_COLS;
-    int row = phase_index / ATLAS_COLS;
+    SDL_FRect src_rect = g_EyesState.look_src_rects[frame_index];
 
-    int ssaa_win_w = win_w * g_CachedSSAAFactor;
-    int ssaa_win_h = win_h * g_CachedSSAAFactor;
+    float left_lx  = 48.0f;
+    float left_ly  = 30.0f;
+    float right_rx = 80.0f;
+    float right_ry = 30.0f;
 
-    SDL_FRect src_rect;
-    src_rect.x = (float)(col * ssaa_win_w);
-    src_rect.y = (float)(row * ssaa_win_h);
-    src_rect.w = (float)ssaa_win_w;
-    src_rect.h = (float)ssaa_win_h;
+    SDL_FRect left_dst  = { left_lx, left_ly, BASE_EYE_CELL_DIM, BASE_EYE_CELL_DIM };
+    SDL_FRect right_dst = { right_rx, right_ry, BASE_EYE_CELL_DIM, BASE_EYE_CELL_DIM };
 
-    SDL_FRect dst_rect;
-    dst_rect.x = 0.0f;
-    dst_rect.y = 0.0f;
-    dst_rect.w = BASELINE_CANVAS_W;
-    dst_rect.h = BASELINE_CANVAS_H;
+    SDL_SetTextureColorMod(g_EyesState.atlas_texture, color.r, color.g, color.b);
 
-    SDL_RenderTexture(renderer, g_AtlasSheetTexture, &src_rect, &dst_rect);
+    SDL_RenderTexture(renderer, g_EyesState.atlas_texture, &src_rect, &left_dst);
+    SDL_RenderTexture(renderer, g_EyesState.atlas_texture, &src_rect, &right_dst);
 }
 
 void CatClock_DestroyEyesPipeline(void) {
-    if (g_AtlasSheetTexture) {
-        SDL_DestroyTexture(g_AtlasSheetTexture);
-        g_AtlasSheetTexture = NULL;
+    if (g_EyesState.atlas_texture) {
+        SDL_DestroyTexture(g_EyesState.atlas_texture);
+        g_EyesState.atlas_texture = NULL;
     }
-    g_CachedWindowWidth  = 0;
-    g_CachedWindowHeight = 0;
-    g_CachedSSAAFactor   = 0;
-    g_CachedTextureColor = (SDL_Color){0, 0, 0, 0};
+    if (g_EyesState.look_src_rects) {
+        SDL_free(g_EyesState.look_src_rects);
+        g_EyesState.look_src_rects = NULL;
+    }
+    g_EyesState.allocated_frames = 0;
+    g_EyesState.last_cached_scale = 0.0f;
 }
