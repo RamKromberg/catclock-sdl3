@@ -9,6 +9,7 @@ pkgs.mkShell {
     gcc
     gnumake
     sdl3
+    libfaketime
     imagemagick
     osslsigncode
     openssl
@@ -20,6 +21,17 @@ pkgs.mkShell {
   ];
 
   shellHook = ''
+    # For testing the clock at different times. e.g.
+    # $ FAKETIME="2026-01-01 12:10:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:10:00" xclock
+    # $ FAKETIME="2026-01-01 12:15:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:15:00" xclock
+    # $ FAKETIME="2026-01-01 12:20:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:20:00" xclock
+    # $ FAKETIME="2026-01-01 12:25:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:25:00" xclock
+    # $ FAKETIME="2026-01-01 12:35:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:35:00" xclock
+    # $ FAKETIME="2026-01-01 12:40:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:40:00" xclock
+    # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
+    # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
+    export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
+
     # Export the dev prefix for compilation headers/import libs
     export WINDOWS_SDL_PREFIX="${windowsPkgs.sdl3}"
 

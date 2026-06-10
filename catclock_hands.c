@@ -28,221 +28,267 @@
 #include <math.h>
 #include <malloc.h>
 
-#define PHASES_PER_HAND 60
-#define GRID_COLUMNS    10
-#define GRID_ROWS       6
-#define TOTAL_HANDS     3
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+extern int ssaa_factor;
 
 typedef struct {
     SDL_Texture *atlas_texture;
-    int frame_w;
-    int frame_h;
-    SDL_FRect hour_src_rects[PHASES_PER_HAND];
-    SDL_FRect minute_src_rects[PHASES_PER_HAND];
-    SDL_FRect second_src_rects[PHASES_PER_HAND];
-} CatClockHardwareAtlas;
+    SDL_FRect *hour_src_rects;
+    SDL_FRect *second_src_rects;
+    int total_frames;
+    int frame_width;
+    int frame_height;
+} PreFlippedAtlas;
 
-CatClockHardwareAtlas g_hands_atlas = { 0 };
+SDL_Texture *g_hands_atlas = NULL;
+static SDL_Texture *g_hour_tex = NULL;
+static SDL_Texture *g_minute_tex = NULL;
+static SDL_Texture *g_second_tex = NULL;
 
-/**
- * Draws an anti-aliased, tapered geometric pointer using hardware triangle primitives.
- * Pulls the base points backward along the inverse angle vector to anchor under the center pin.
- */
-static void draw_geometric_triangle_hand(SDL_Renderer *renderer, float cx, float cy, float tx, float ty, float base_width, float pivot_retract, SDL_FColor color) {
-    float dx = tx - cx;
-    float dy = ty - cy;
-    float length = sqrtf(dx * dx + dy * dy);
+static int cached_win_w = 0;
+static int cached_win_h = 0;
+static int cached_ssaa_factor = 0;
 
-    if (length <= 0.0f) return;
-
-    // Perpendicular normal vectors for thickness offsetting
-    float nx = -dy / length;
-    float ny = dx / length;
-
-    // Forward direction components
-    float fx = dx / length;
-    float fy = dy / length;
-
-    // Shift base anchors backward along the inverse angle vector to retract hands under the pin
-    float start_cx = cx - (fx * pivot_retract);
-    float start_cy = cy - (fy * pivot_retract);
-
-    SDL_Vertex vertices[3];
-
-    // Left base vertex point
-    vertices[0].position.x = start_cx - nx * (base_width / 2.0f);
-    vertices[0].position.y = start_cy - ny * (base_width / 2.0f);
-    vertices[0].color = color;
-    vertices[0].tex_coord.x = 0.0f;
-    vertices[0].tex_coord.y = 0.0f;
-
-    // Right base vertex point
-    vertices[1].position.x = start_cx + nx * (base_width / 2.0f);
-    vertices[1].position.y = start_cy + ny * (base_width / 2.0f);
-    vertices[1].color = color;
-    vertices[1].tex_coord.x = 0.0f;
-    vertices[1].tex_coord.y = 0.0f;
-
-    // Sharp endpoint tip vertex pointer
-    vertices[2].position.x = tx;
-    vertices[2].position.y = ty;
-    vertices[2].color = color;
-    vertices[2].tex_coord.x = 0.0f;
-    vertices[2].tex_coord.y = 0.0f;
-
-    int indices[3] = { 0, 1, 2 };
-
-    SDL_RenderGeometry(renderer, NULL, vertices, 3, indices, 3);
+void destroy_clock_hands_atlas(void) {
+    if (g_hour_tex != NULL) { SDL_DestroyTexture(g_hour_tex); g_hour_tex = NULL; }
+    if (g_minute_tex != NULL) { SDL_DestroyTexture(g_minute_tex); g_minute_tex = NULL; }
+    if (g_second_tex != NULL) { SDL_DestroyTexture(g_second_tex); g_second_tex = NULL; }
+    g_hands_atlas = NULL;
+    cached_win_w = 0;
+    cached_win_h = 0;
+    cached_ssaa_factor = 0;
 }
 
-/**
- * Procedural Vector Drawing Engine with Elliptical Prolate Spheroid Projection.
- * Shrinks hands gracefully along the horizontal paths (3 and 9 o'clock).
- */
-static void draw_projected_hand_geometry(SDL_Renderer *renderer, int cx, int cy, int hand_h, int phase_index, int hand_type) {
-    // 360 degrees divided across 60 steps = 6 degrees per step
-    float raw_angle_rad = (float)phase_index * 6.0f * (M_PI / 180.0f);
-
-    // --- TRUE PROLATE SPHEROID ELLIPTICAL PROJECTION ---
-    float ellipse_axis_x = 1.0f;
-    float ellipse_axis_y = 0.78f; // Squashed vertically
-
-    // 1. Angular distortion remapping: adjust the pointing vectors to land squarely on numbers
-    float projected_angle_rad = atan2f(sinf(raw_angle_rad) * ellipse_axis_x, cosf(raw_angle_rad) * ellipse_axis_y);
-
-    float cos_a = cosf(projected_angle_rad);
-    float sin_a = sinf(projected_angle_rad);
-
-    float base_length = 0.0f;
-    float base_width = 2.0f;
-    float pivot_retract = 0.0f;
-    SDL_FColor color;
-
-    // Scaling modifier: Restores the vector width density proportional to the high-res texture block width
-    float scale_mod = (float)hand_h / 128.0f;
-
-    // Implements your exact calibrated variable values
-    if (hand_type == 0) {       // Hour Hand
-        color = (SDL_FColor){ 0.0f, 0.0f, 0.0f, 1.0f };
-        base_length = (float)hand_h * 0.18f;
-        base_width = 10.0f * scale_mod;
-        pivot_retract = (float)hand_h * 0.05f;
-    } else if (hand_type == 1) { // Minute Hand
-        color = (SDL_FColor){ 0.0f, 0.0f, 0.0f, 1.0f };
-        base_length = (float)hand_h * 0.28f;
-        base_width = 7.5f * scale_mod;
-        pivot_retract = (float)hand_h * 0.04f;
-    } else {                    // Second Hand (Crimson Needle)
-        color = (SDL_FColor){ 0.88f, 0.15f, 0.15f, 1.0f };
-        base_length = (float)hand_h * 0.27f;
-        base_width = 3.0f * scale_mod;
-        pivot_retract = (float)hand_h * 0.06f;
+bool REBUILD_pre_rendered_60phase_atlas(SDL_Renderer *renderer, PreFlippedAtlas *atlas, Uint8 r, Uint8 g, Uint8 b, Uint8 a) {
+    (void)r; (void)g; (void)b; (void)a;
+    if (!atlas) {
+        return false;
     }
 
-    // 2. Prolate Spheroid Axis Compensation: Shrinks hands gracefully along horizontal vectors
-    float target_x = (float)cx + (sin_a * base_length * ellipse_axis_y);
-    float target_y = (float)cy - (cos_a * base_length);
+    int win_w = 0, win_h = 0;
+    if (!SDL_GetRenderOutputSize(renderer, &win_w, &win_h)) {
+        return false;
+    }
 
-    draw_geometric_triangle_hand(renderer, (float)cx, (float)cy, target_x, target_y, base_width, pivot_retract, color);
-}
+    int current_ssaa = (ssaa_factor > 0) ? ssaa_factor : 1;
 
-/**
- * Public Lifecycle Cleanup Pass.
- * Forces the graphics driver to flush its internal deferred queues before trimming memory.
- */
-void destroy_clock_hands_atlas(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas) {
-    if (atlas && atlas->atlas_texture) {
-        if (renderer) {
-            // CRITICAL ARCHITECTURAL PATCH: Force the hardware context to
-            // completely unlink its target reference blocks before destruction.
-            // This strips hidden driver caches and stops memory leak spikes.
-            SDL_SetRenderTarget(renderer, NULL);
-            SDL_SetRenderViewport(renderer, NULL);
-            SDL_FlushRenderer(renderer);
+    if (g_hour_tex != NULL && g_minute_tex != NULL && g_second_tex != NULL &&
+        win_w == cached_win_w &&
+        win_h == cached_win_h &&
+        current_ssaa == cached_ssaa_factor) {
+        g_hands_atlas = g_hour_tex;
+        atlas->atlas_texture = g_hour_tex;
+        return true;
+    }
+
+    destroy_clock_hands_atlas();
+
+    int ssaa_win_w = win_w * current_ssaa;
+    int ssaa_win_h = win_h * current_ssaa;
+
+    atlas->total_frames = 60;
+    atlas->frame_width = ssaa_win_w;
+    atlas->frame_height = ssaa_win_h;
+
+    int grid_w = ssaa_win_w * 8;
+    int grid_h = ssaa_win_h * 8;
+
+    g_hour_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, grid_w, grid_h);
+    g_minute_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, grid_w, grid_h);
+    g_second_tex = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, grid_w, grid_h);
+
+    if (!g_hour_tex || !g_minute_tex || !g_second_tex) {
+        destroy_clock_hands_atlas();
+        return false;
+    }
+
+    g_hands_atlas = g_hour_tex;
+    atlas->atlas_texture = g_hour_tex;
+
+    SDL_SetTextureScaleMode(g_hour_tex, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(g_hour_tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(g_minute_tex, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(g_minute_tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(g_second_tex, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureBlendMode(g_second_tex, SDL_BLENDMODE_BLEND);
+
+    SDL_Texture *prev_target = SDL_GetRenderTarget(renderer);
+    SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+
+    SDL_SetRenderTarget(renderer, g_hour_tex); SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
+    SDL_SetRenderTarget(renderer, g_minute_tex); SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
+    SDL_SetRenderTarget(renderer, g_second_tex); SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0); SDL_RenderClear(renderer);
+
+    float center_x_base = 73.0f;
+    float center_y_base = 150.0f;
+
+    float scale_x = (float)ssaa_win_w / 150.0f;
+    float scale_y = (float)ssaa_win_h / 300.0f;
+
+    for (int i = 0; i < 60; ++i) {
+        int col = i % 8;
+        int row = i / 8;
+        float slot_offset_x = (float)(col * ssaa_win_w);
+        float slot_offset_y = (float)(row * ssaa_win_h);
+
+        float cx = (center_x_base * scale_x) + slot_offset_x;
+        float cy = (center_y_base * scale_y) + slot_offset_y;
+
+        double angle = (i / 60.0) * 2.0 * M_PI;
+        float cos_a = (float)cos(angle);
+        float sin_a = (float)sin(angle);
+
+        SDL_SetRenderTarget(renderer, g_hour_tex);
+        float h_w = 4.5f;
+        float h_back = 5.0f;
+        float h_front = 18.0f;
+
+        float h_dir_x = (sin_a * h_front) * scale_x;
+        float h_dir_y = (-cos_a * h_front) * scale_y;
+        float h_side_x = (cos_a * h_w) * scale_x;
+        float h_side_y = (sin_a * h_w) * scale_y;
+        float h_tail_x = (-sin_a * h_back) * scale_x;
+        float h_tail_y = (cos_a * h_back) * scale_y;
+
+        SDL_Vertex h_verts[3];
+        h_verts[0].position.x = cx + h_dir_x;
+        h_verts[0].position.y = cy + h_dir_y;
+        h_verts[0].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+
+        h_verts[1].position.x = cx + h_tail_x + h_side_x;
+        h_verts[1].position.y = cy + h_tail_y + h_side_y;
+        h_verts[1].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+
+        h_verts[2].position.x = cx + h_tail_x - h_side_x;
+        h_verts[2].position.y = cy + h_tail_y - h_side_y;
+        h_verts[2].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+        SDL_RenderGeometry(renderer, NULL, h_verts, 3, NULL, 0);
+
+        if (atlas->hour_src_rects) {
+            atlas->hour_src_rects[i].x = slot_offset_x;
+            atlas->hour_src_rects[i].y = slot_offset_y;
+            atlas->hour_src_rects[i].w = (float)ssaa_win_w;
+            atlas->hour_src_rects[i].h = (float)ssaa_win_h;
         }
 
-        SDL_DestroyTexture(atlas->atlas_texture);
-        atlas->atlas_texture = NULL;
+        SDL_SetRenderTarget(renderer, g_minute_tex);
+        float m_w = 3.5f;
+        float m_back = 6.0f;
+        float m_front = 28.0f;
+
+        float m_dir_x = (sin_a * m_front) * scale_x;
+        float m_dir_y = (-cos_a * m_front) * scale_y;
+        float m_side_x = (cos_a * m_w) * scale_x;
+        float m_side_y = (sin_a * m_w) * scale_y;
+        float m_tail_x = (-sin_a * m_back) * scale_x;
+        float m_tail_y = (cos_a * m_back) * scale_y;
+
+        SDL_Vertex m_verts[3];
+        m_verts[0].position.x = cx + m_dir_x;
+        m_verts[0].position.y = cy + m_dir_y;
+        m_verts[0].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+
+        m_verts[1].position.x = cx + m_tail_x + m_side_x;
+        m_verts[1].position.y = cy + m_tail_y + m_side_y;
+        m_verts[1].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+
+        m_verts[2].position.x = cx + m_tail_x - m_side_x;
+        m_verts[2].position.y = cy + m_tail_y - m_side_y;
+        m_verts[2].color = (SDL_FColor){0.0f, 0.0f, 0.0f, 1.0f};
+        SDL_RenderGeometry(renderer, NULL, m_verts, 3, NULL, 0);
+
+        SDL_SetRenderTarget(renderer, g_second_tex);
+        float s_w = 2.0f;
+        float s_back = 7.0f;
+        float s_front = 38.0f;
+
+        float s_dir_x = (sin_a * s_front) * scale_x;
+        float s_dir_y = (-cos_a * s_front) * scale_y;
+        float s_side_x = (cos_a * s_w) * scale_x;
+        float s_side_y = (sin_a * s_w) * scale_y;
+        float s_tail_x = (-sin_a * s_back) * scale_x;
+        float s_tail_y = (cos_a * s_back) * scale_y;
+
+        SDL_Vertex s_verts[3];
+        s_verts[0].position.x = cx + s_dir_x;
+        s_verts[0].position.y = cy + s_dir_y;
+        s_verts[0].color = (SDL_FColor){0.86f, 0.0f, 0.0f, 1.0f};
+
+        s_verts[1].position.x = cx + s_tail_x + s_side_x;
+        s_verts[1].position.y = cy + s_tail_y + s_side_y;
+        s_verts[1].color = (SDL_FColor){0.86f, 0.0f, 0.0f, 1.0f};
+
+        s_verts[2].position.x = cx + s_tail_x - s_side_x;
+        s_verts[2].position.y = cy + s_tail_y - s_side_y;
+        s_verts[2].color = (SDL_FColor){0.86f, 0.0f, 0.0f, 1.0f};
+        SDL_RenderGeometry(renderer, NULL, s_verts, 3, NULL, 0);
+
+        if (atlas->second_src_rects) {
+            atlas->second_src_rects[i].x = slot_offset_x;
+            atlas->second_src_rects[i].y = slot_offset_y;
+            atlas->second_src_rects[i].w = (float)ssaa_win_w;
+            atlas->second_src_rects[i].h = (float)ssaa_win_h;
+        }
     }
-}
 
-/**
- * Dynamically reallocates the VRAM texture sheet to mirror window resizing.
- * Grows and contracts memory use cleanly based on incoming viewport size requirements.
- */
-bool REBUILD_pre_rendered_60phase_atlas(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, int hand_w, int hand_h) {
-    destroy_clock_hands_atlas(renderer, atlas);
+    SDL_SetRenderTarget(renderer, prev_target);
+    SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
-    atlas->frame_w = hand_w;
-    atlas->frame_h = hand_h;
+    cached_win_w = win_w;
+    cached_win_h = win_h;
+    cached_ssaa_factor = current_ssaa;
 
-    int total_atlas_w = hand_w * GRID_COLUMNS;
-    int total_atlas_h = (hand_h * GRID_ROWS) * TOTAL_HANDS;
-
-    atlas->atlas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, total_atlas_w, total_atlas_h);
-    if (!atlas->atlas_texture) return false;
-
-    // Use Linear filtering so that high-resolution vector geometry anti-aliases smoothly
-    SDL_SetTextureScaleMode(atlas->atlas_texture, SDL_SCALEMODE_LINEAR);
-    SDL_SetTextureBlendMode(atlas->atlas_texture, SDL_BLENDMODE_BLEND);
-
-    SDL_SetRenderTarget(renderer, atlas->atlas_texture);
-
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-    SDL_RenderClear(renderer);
-
-    int tile_cx = hand_w / 2;
-    int tile_cy = hand_h / 2;
-
-    for (int i = 0; i < PHASES_PER_HAND; i++) {
-        int col = i % GRID_COLUMNS;
-        int row = i / GRID_COLUMNS;
-
-        float offset_x = (float)(col * hand_w);
-        float hour_offset_y   = (float)(row * hand_h);
-        float minute_offset_y = (float)((row + GRID_ROWS) * hand_h);
-        float second_offset_y = (float)((row + (GRID_ROWS * 2)) * hand_h);
-
-        SDL_Rect viewport_hour = { (int)offset_x, (int)hour_offset_y, hand_w, hand_h };
-        SDL_SetRenderViewport(renderer, &viewport_hour);
-        draw_projected_hand_geometry(renderer, tile_cx, tile_cy, hand_h, i, 0);
-        atlas->hour_src_rects[i] = (SDL_FRect){ offset_x, hour_offset_y, (float)hand_w, (float)hand_h };
-
-        SDL_Rect viewport_minute = { (int)offset_x, (int)minute_offset_y, hand_w, hand_h };
-        SDL_SetRenderViewport(renderer, &viewport_minute);
-        draw_projected_hand_geometry(renderer, tile_cx, tile_cy, hand_h, i, 1);
-        atlas->minute_src_rects[i] = (SDL_FRect){ offset_x, minute_offset_y, (float)hand_w, (float)hand_h };
-
-        SDL_Rect viewport_second = { (int)offset_x, (int)second_offset_y, hand_w, hand_h };
-        SDL_SetRenderViewport(renderer, &viewport_second);
-        draw_projected_hand_geometry(renderer, tile_cx, tile_cy, hand_h, i, 2);
-        atlas->second_src_rects[i] = (SDL_FRect){ offset_x, second_offset_y, (float)hand_w, (float)hand_h };
-    }
-
-    SDL_SetRenderViewport(renderer, NULL);
-    SDL_SetRenderTarget(renderer, NULL);
     return true;
 }
 
-/**
- * Places the pre-baked atlas frame directly onto the clock center.
- */
-void RUNTIME_blit_pre_rendered_hands(SDL_Renderer *renderer, CatClockHardwareAtlas *atlas, float center_x, float center_y, int hour_val, int minute_val, int second_val) {
-    if (!atlas || !atlas->atlas_texture) return;
+void RUNTIME_blit_pre_rendered_hands(
+    SDL_Renderer *renderer,
+    PreFlippedAtlas *atlas,
+    float center_x,
+    float center_y,
+    int hour_phase,
+    int minute_phase,
+    int second_phase
+) {
+    if (!atlas || !g_hour_tex || !g_minute_tex || !g_second_tex) {
+        return;
+    }
 
-    int h_frame = (hour_val % PHASES_PER_HAND + PHASES_PER_HAND) % PHASES_PER_HAND;
-    int m_frame = (minute_val % PHASES_PER_HAND + PHASES_PER_HAND) % PHASES_PER_HAND;
-    int s_frame = (second_val % PHASES_PER_HAND + PHASES_PER_HAND) % PHASES_PER_HAND;
+    int h_idx = (hour_phase >= 0 && hour_phase < 60) ? hour_phase : 0;
+    int m_idx = (minute_phase >= 0 && minute_phase < 60) ? minute_phase : 0;
+    int s_idx = (second_phase >= 0 && second_phase < 60) ? second_phase : 0;
 
-    float base_render_w = 128.0f;
-    float base_render_h = 128.0f;
+    SDL_FRect dest_pos;
+    dest_pos.x = center_x - 73.0f;
+    dest_pos.y = center_y - 150.0f;
+    dest_pos.w = 150.0f;
+    dest_pos.h = 300.0f;
 
-    float screen_x = center_x - (base_render_w / 2.0f);
-    float screen_y = center_y - (base_render_h / 2.0f);
+    float ssaa_scale = (ssaa_factor > 0) ? (float)ssaa_factor : 1.0f;
+    int win_w = 0, win_h = 0;
+    SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
+    float ssaa_win_w = (float)win_w * ssaa_scale;
+    float ssaa_win_h = (float)win_h * ssaa_scale;
 
-    SDL_FRect dest_pos = { screen_x, screen_y, base_render_w, base_render_h };
+    int h_col = h_idx % 8; int h_row = h_idx / 8;
+    int m_col = m_idx % 8; int m_row = m_idx / 8;
+    int s_col = s_idx % 8; int s_row = s_idx / 8;
 
-    SDL_RenderTexture(renderer, atlas->atlas_texture, &atlas->hour_src_rects[h_frame], &dest_pos);
-    SDL_RenderTexture(renderer, atlas->atlas_texture, &atlas->minute_src_rects[m_frame], &dest_pos);
-    SDL_RenderTexture(renderer, atlas->atlas_texture, &atlas->second_src_rects[s_frame], &dest_pos);
+    SDL_FRect h_src = { (float)h_col * ssaa_win_w, (float)h_row * ssaa_win_h, ssaa_win_w, ssaa_win_h };
+    SDL_FRect m_src = { (float)m_col * ssaa_win_w, (float)m_row * ssaa_win_h, ssaa_win_w, ssaa_win_h };
+    SDL_FRect s_src = { (float)s_col * ssaa_win_w, (float)s_row * ssaa_win_h, ssaa_win_w, ssaa_win_h };
+
+    SDL_RenderTexture(renderer, g_hour_tex, &h_src, &dest_pos);
+    SDL_RenderTexture(renderer, g_minute_tex, &m_src, &dest_pos);
+    if (second_phase >= 0) {
+        SDL_RenderTexture(renderer, g_second_tex, &s_src, &dest_pos);
+    }
 }
+
+void CatClock_DrawHands(SDL_Renderer *renderer, int hours, int minutes) {
+    int h_phase = ((hours % 12) * 5) + (minutes / 12);
+    int m_phase = minutes % 60;
+(void)renderer; (void)h_phase; (void)m_phase;}
