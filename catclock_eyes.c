@@ -50,7 +50,28 @@ static void LowLevel_DrawSpecializedPupil(SDL_Renderer *renderer, float cx, floa
         float width_factor = fmaxf(0.0f, 1.0f - (h_ratio * h_ratio));
         float width_at_y = pup_w * sqrtf(width_factor);
 
-        SDL_RenderLine(renderer, cx + ox - width_at_y, (float)y, cx + ox + width_at_y, (float)y);
+        // Define the horizontal segment endpoints calculated by your layout geometry
+        float start_x = cx + ox - width_at_y;
+        float end_x   = cx + ox + width_at_y;
+
+        // --------------------------------------------------------------------
+        // LOCALIZED FIX: STATIONARY PRE-BAKE SHAPE MASK CLIP
+        // --------------------------------------------------------------------
+        // The maximum radius of a 23x23 eye socket is exactly 11.5px.
+        // We use a tight 11.2f boundary to prevent edge bleeding on the canvas texture.
+        float max_socket_radius = 11.2f * scale;
+        float socket_dy = (float)y - cy; // Delta from stationary cell height center
+
+        // Scan across individual horizontal coordinate points of the span
+        for (float sx = start_x; sx <= end_x; sx += 1.0f) {
+            float socket_dx = sx - cx; // Delta from stationary width center
+
+            // Standard Circle Equation: x^2 + y^2 <= r^2
+            if ((socket_dx * socket_dx) + (socket_dy * socket_dy) <= (max_socket_radius * max_socket_radius)) {
+                SDL_RenderPoint(renderer, sx, (float)y);
+            }
+        }
+        // --------------------------------------------------------------------
     }
 }
 
@@ -92,7 +113,7 @@ static void REBUILD_pre_rendered_eyes_atlas(SDL_Renderer *renderer, float curren
     SDL_RenderClear(renderer);
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    SDL_Color pupil_color = { 0, 0, 0, 255 };
+    SDL_Color pupil_color = { 255, 255, 255, 255 }; // Don't change color here. Use RenderAuthenticOriginalEyes(renderer, pupil_color) instead.
     for (int i = 0; i < required_frames; i++) {
         int cell_x = (i % cols) * cell_w;
         int cell_y = (i / cols) * cell_h;
@@ -132,29 +153,52 @@ void RenderAuthenticOriginalEyes(SDL_Renderer *renderer, SDL_Color color) {
         REBUILD_pre_rendered_eyes_atlas(renderer, current_scale);
     }
 
-    if (!g_EyesState.atlas_texture || !g_EyesState.look_src_rects || g_EyesState.allocated_frames <= 0) {
-        return;
-    }
+    Uint64 time_ms = SDL_GetTicks();
+    float phase_ratio = (float)(time_ms % 2000) / 2000.0f;
 
-    uint64_t current_ticks = SDL_GetTicks();
-    int frame_index = (int)(((current_ticks % CYCLE_PERIOD_MS) * (uint64_t)g_EyesState.allocated_frames) / CYCLE_PERIOD_MS);
-    if (frame_index >= g_EyesState.allocated_frames) frame_index = g_EyesState.allocated_frames - 1;
+    int frame_idx = (int)(phase_ratio * (float)required_frames);
+    if (frame_idx >= required_frames) frame_idx = required_frames - 1;
+    if (frame_idx < 0) frame_idx = 0;
 
-    SDL_FRect src_rect = g_EyesState.look_src_rects[frame_index];
-
+    // Fixed unscaled layout baseline anchors
     float left_lx  = 48.0f;
     float left_ly  = 30.0f;
     float right_rx = 80.0f;
     float right_ry = 30.0f;
 
-    SDL_FRect left_dst  = { left_lx, left_ly, BASE_EYE_CELL_DIM, BASE_EYE_CELL_DIM };
-    SDL_FRect right_dst = { right_rx, right_ry, BASE_EYE_CELL_DIM, BASE_EYE_CELL_DIM };
+    // Grab pre-scaled source bounding boxes straight from your array cache
+    SDL_FRect left_src = g_EyesState.look_src_rects[frame_idx];
 
+    int right_frame_idx = (required_frames - 1 - frame_idx);
+    if (right_frame_idx < 0) right_frame_idx = 0;
+
+    SDL_FRect right_src = g_EyesState.look_src_rects[right_frame_idx];
+
+    // LOCALIZED FIX:
+    // Remove the double scale multiplication on destinations. The viewport matrix
+    // handles coordinate matching natively while keeping the look_src_rects sizes intact.
+    SDL_FRect left_dest  = { left_lx,  left_ly,  left_src.w / current_scale,  left_src.h / current_scale };
+    SDL_FRect right_dest = { right_rx, right_ry, right_src.w / current_scale, right_src.h / current_scale };
+
+    // Update color and alpha modulation parameters
     SDL_SetTextureColorMod(g_EyesState.atlas_texture, color.r, color.g, color.b);
+    SDL_SetTextureAlphaMod(g_EyesState.atlas_texture, color.a);
 
-    SDL_RenderTexture(renderer, g_EyesState.atlas_texture, &src_rect, &left_dst);
-    SDL_RenderTexture(renderer, g_EyesState.atlas_texture, &src_rect, &right_dst);
+    // Render Left Eye normally
+    SDL_RenderTexture(renderer, g_EyesState.atlas_texture, &left_src, &left_dest);
+
+    // Render Right Eye using the mirrored phase slice and hardware horizontal flip matrix
+    SDL_RenderTextureRotated(
+        renderer,
+        g_EyesState.atlas_texture,
+        &right_src,
+        &right_dest,
+        0.0,
+        NULL,
+        SDL_FLIP_HORIZONTAL
+    );
 }
+
 
 void CatClock_DestroyEyesPipeline(void) {
     if (g_EyesState.atlas_texture) {

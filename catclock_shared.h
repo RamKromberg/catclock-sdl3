@@ -63,6 +63,12 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary *lib);
 void CatClock_RebakeXbmTextures(SDL_Renderer *renderer, CatClock_XbmLibrary *lib);
 void CatClock_RenderXbmLayer(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, const char *layer_id, SDL_Color color);
 
+SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const char *path, SDL_Color color, bool invert_mask);
+void CatClock_SetXbmLayerScaleMode(CatClock_XbmLibrary *lib, const char *layer_id, SDL_ScaleMode mode);
+void CatClock_SetXbmLayerBlendMode(CatClock_XbmLibrary *lib, const char *layer_id, SDL_BlendMode mode);
+
+void CatClock_RenderHaloOutline(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, SDL_Color color);
+
 /* Rendering Modules */
 void REBUILD_pre_rendered_60phase_atlas(SDL_Renderer* renderer, PreFlippedAtlas* atlas, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 void RUNTIME_blit_pre_rendered_hands(SDL_Renderer* renderer, PreFlippedAtlas* atlas, float centerX, float centerY, int hour, int minute, int second);

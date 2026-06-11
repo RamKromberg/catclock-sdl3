@@ -77,7 +77,7 @@ int main(int argc, char *argv[])
         "CatClock-SDL3 Widget Core",
         target_w,
         target_h,
-        SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT
+        SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_ALWAYS_ON_TOP
     );
 
     if (!window)
