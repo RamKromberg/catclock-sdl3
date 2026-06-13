@@ -65,4 +65,7 @@ void RenderBakedClockHandToPipeline(SDL_Renderer *renderer, int hand_type, int p
 void BakeClockHandsAtlases(SDL_Renderer *renderer);
 void FreeClockHandsAtlases(void);
 
+/* Insert directly inside catclock_atlas.h right before #endif */
+void CatClock_ShaderTailHaloBake(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
+
 #endif /* CATCLOCK_ATLAS_H */

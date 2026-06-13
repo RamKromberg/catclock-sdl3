@@ -106,6 +106,37 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas *atlas) {
     atlas->last_scale = -1.0f;
 }
 
+/**
+ * Specialized Sub-Pass Shader that replicates an unclipped 8-way geometric offset trace
+ * to pre-bake a thick white background silhouette mask inside our temporary rendering buffer.
+ */
+void CatClock_ShaderTailHaloBake(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata) {
+    (void)userdata;
+    SDL_Color white_cfg = { 255, 255, 255, 255 };
+
+    /* 8-Way micro-offsets mapped during geometry rasterization phase */
+    float offsets_x[] = { -1.0f,  1.0f,  0.0f,  0.0f, -1.0f, -1.0f,  1.0f,  1.0f };
+    float offsets_y[] = {  0.0f,  0.0f, -1.0f,  1.0f, -1.0f,  1.0f, -1.0f,  1.0f };
+
+    /* Preserve baseline viewport variables */
+    SDL_Rect orig_viewport;
+    SDL_GetRenderViewport(renderer, &orig_viewport);
+
+    for (int i = 0; i < 8; i++) {
+        SDL_Rect offset_viewport = {
+            orig_viewport.x + (int)(offsets_x[i] * scale),
+            orig_viewport.y + (int)(offsets_y[i] * scale),
+            orig_viewport.w,
+            orig_viewport.h
+        };
+        SDL_SetRenderViewport(renderer, &offset_viewport);
+        CatClock_ShaderTail(renderer, cell_w, cell_h, scale, frame_idx, &white_cfg);
+    }
+
+    /* Restore clean cell viewport positioning */
+    SDL_SetRenderViewport(renderer, &orig_viewport);
+}
+
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppContext *ctx, float sway_deg, int hour_phase, int minute_phase, int second_phase) {
     if (!ctx || !renderer) return;
     (void)sway_deg;
@@ -124,6 +155,12 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppCon
         CatClock_DestroyComputeAtlas(&ctx->seconds_atlas);
         CatClock_DestroyComputeAtlas(&ctx->eyes_atlas);
         CatClock_DestroyComputeAtlas(&ctx->tail_atlas);
+
+        /* If halo_layer was used as a texture raw pointer, clean it or reset metrics */
+        if (ctx->halo_layer) {
+            SDL_DestroyTexture(ctx->halo_layer);
+            ctx->halo_layer = NULL;
+        }
 
         ctx->master_composite_layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, ctx->current_win_w, ctx->current_win_h);
         if (ctx->master_composite_layer) {
@@ -144,6 +181,10 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppCon
     CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 24, 24, req_frames, 10, CatClock_ShaderEyes, NULL);
     CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, req_frames, 8, CatClock_ShaderTail, &ctx->fg_color);
 
+    /* REUSE HALO TEXTURE OVER SENSE SLOT: Temporary allocation to store our outline atlas metrics */
+    static CatClock_ComputeAtlas tail_halo_blueprint = {0};
+    CatClock_RebakeComputeAtlas(renderer, &tail_halo_blueprint, 96, 96, req_frames, 8, CatClock_ShaderTailHaloBake, NULL);
+
     SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
     SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
@@ -155,15 +196,29 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppCon
     CatClock_RenderHaloOutline(ctx->xbm_lib, renderer, ctx->bg_color);
     CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->bg_color, 0.0f, 0.0f);
 
-    /* Pass 3: Pre-Baked 16-bit Tail */
-    if (ctx->tail_atlas.texture) {
+    /* =========================================================================
+       Pass 3: Pre-Baked 16-bit Tail with Hardware 8-Way White Halo Silhouette Blit Mapping
+       ========================================================================= */
+    if (ctx->tail_atlas.texture && tail_halo_blueprint.texture) {
         float phase_ratio = (float)(SDL_GetTicks() % CYCLE_PERIOD_MS) / (float)CYCLE_PERIOD_MS;
         int tail_idx = (int)(phase_ratio * (float)req_frames);
         if (tail_idx >= req_frames) tail_idx = req_frames - 1;
         if (tail_idx < 0) tail_idx = 0;
 
-        SDL_FRect dst = { 74.0f - 48.0f, 210.5f - 12.0f, 96.0f, 96.0f };
-        SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx], &dst);
+        /* Re-verified centerline positioning metrics matching baseline grounds */
+        SDL_FRect base_dst = { 27.0f, 200.0f, 96.0f, 96.0f };
+
+        /* Render Pass 3A: White Pre-Baked Outline Backdrop Layer */
+        SDL_SetTextureBlendMode(tail_halo_blueprint.texture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(tail_halo_blueprint.texture, 255, 255, 255);
+        SDL_SetTextureAlphaMod(tail_halo_blueprint.texture, 255);
+        SDL_RenderTexture(renderer, tail_halo_blueprint.texture, &tail_halo_blueprint.src_rects[tail_idx], &base_dst);
+
+        /* Render Pass 3B: Foreground Inner Core Overlay Layer */
+        SDL_SetTextureBlendMode(ctx->tail_atlas.texture, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(ctx->tail_atlas.texture, ctx->fg_color.r, ctx->fg_color.g, ctx->fg_color.b);
+        SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, ctx->fg_color.a);
+        SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx], &base_dst);
     }
 
     /* Pass 4 & 5: Outer Linework Outlines and Neckties */
