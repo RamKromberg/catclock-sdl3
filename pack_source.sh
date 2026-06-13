@@ -15,7 +15,7 @@ for src_file in *.[ch]; do
     output_pdf="${src_file}.pdf"
     echo "Encoding: $src_file -> $output_pdf"
 
-    # 1. Base64 encode the source text file. 
+    # 1. Base64 encode the source text file.
     # Using standard POSIX-friendly line wrapping for formatting inside the PDF stream.
     b64_payload=$(base64 "$src_file" | fold -w 65)
 
@@ -45,11 +45,11 @@ endstream
 endobj
 xref
 0 5
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000305 00000 n 
+0000000000 65535 f
+0000000009 00000 n
+0000000058 00000 n
+0000000115 00000 n
+0000000305 00000 n
 trailer
 << /Size 5 /Root 1 0 R >>
 startxref
