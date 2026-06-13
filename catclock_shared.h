@@ -16,30 +16,28 @@
 #define CYCLE_PERIOD_MS   2000
 #define TOTAL_PHASES      60
 
+/* Asset Layer Hand Typings */
+#define HAND_TYPE_HOUR    0
+#define HAND_TYPE_MINUTE  1
+#define HAND_TYPE_SECOND  2
+
 typedef struct {
     float x;
     float y;
 } OriginalPoint;
 
-typedef struct {
-    SDL_Texture* atlas_texture;
-    SDL_FRect hour_src_rects[TOTAL_PHASES];
-    SDL_FRect minute_src_rects[TOTAL_PHASES];
-    SDL_FRect second_src_rects[TOTAL_PHASES];
-    float last_scale;
-    int cell_w;
-    int cell_h;
-} PreFlippedAtlas;
+/* Standardized Compute Pass Layout Structure */
+typedef void (*CatClock_ShaderCallback)(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
-/* Fixed Structural Layout Metrics for the Swaying Tail Engine */
+/* Pure, Scale-Aware Pre-Baked Texture Metadata Framework */
 typedef struct {
-    SDL_Texture *atlas_texture;
-    SDL_FRect *phase_src_rects;
-    int allocated_phases;
-    float last_cached_scale;
+    SDL_Texture *texture;
+    int total_frames;
     int cell_w;
     int cell_h;
-} CatClock_TailAtlasMeta;
+    float last_scale;
+    SDL_FRect *src_rects;
+} CatClock_ComputeAtlas;
 
 typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
 
@@ -52,8 +50,14 @@ typedef struct {
     bool texture_cache_stale;
     SDL_Color fg_color;
     SDL_Color bg_color;
-    PreFlippedAtlas hands_atlas_meta;
-    CatClock_TailAtlasMeta tail_atlas_meta; /* Tail Metadata Struct */
+
+    /* Decoupled Lifecycles to Ensure Sharp Multi-Color Blending Profiles */
+    CatClock_ComputeAtlas hands_atlas;
+    CatClock_ComputeAtlas minutes_atlas;
+    CatClock_ComputeAtlas seconds_atlas;
+    CatClock_ComputeAtlas eyes_atlas;
+    CatClock_ComputeAtlas tail_atlas;
+
     CatClock_XbmLibrary *xbm_lib;
     SDL_Texture *master_composite_layer;
     SDL_Texture *halo_layer;
@@ -73,16 +77,13 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary *lib, SDL_Renderer *rende
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, SDL_Color color);
 SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const char *path, SDL_Color color, bool invert_mask);
 
-void REBUILD_pre_rendered_60phase_atlas(SDL_Renderer* renderer, PreFlippedAtlas* atlas, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
-void RUNTIME_blit_pre_rendered_hands(SDL_Renderer* renderer, PreFlippedAtlas* atlas, float centerX, float centerY, int hour, int minute, int second);
+/* Centralized Lifecycle Manager Pipeline Drivers */
+void CatClock_RebakeComputeAtlas(SDL_Renderer *renderer, CatClock_ComputeAtlas *atlas, int cell_base_w, int cell_base_h, int total_frames, int cols, CatClock_ShaderCallback shader, void *userdata);
+void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas *atlas);
 
-void REBUILD_static_eyes_atlas(SDL_Renderer *renderer, float current_scale);
-void RUNTIME_blit_pre_rendered_eyes(SDL_Renderer *renderer, SDL_Color color);
-void CatClock_DestroyEyesPipeline(void);
-
-/* TAIL PIPELINE HOOKS: Hardware pre-baking atlas loop bindings */
-void REBUILD_pre_rendered_tail_atlas(SDL_Renderer *renderer, CatClock_TailAtlasMeta *atlas, SDL_Color color);
-void RUNTIME_blit_pre_rendered_tail(SDL_Renderer *renderer, CatClock_TailAtlasMeta *atlas, float centerX, float centerY, float current_sway_deg);
-void CatClock_DestroyTailPipeline(CatClock_TailAtlasMeta *atlas);
+/* Stateless Asset Pass Callbacks */
+void CatClock_ShaderHands(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
+void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
+void CatClock_ShaderTail(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
 #endif /* CATCLOCK_SHARED_H */
