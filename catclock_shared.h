@@ -51,19 +51,22 @@ typedef struct {
     /* Dedicated Eye Mask Hardware VRAM Surface */
     SDL_Texture *eye_clipping_stencil;
 
-    /* Task 1 Flag Maps */
-    bool hide_seconds;          /* -noseconds */
-    bool disable_outline;       /* -nooutline */
-    bool use_decorations;       /* -decorations */
-    bool disable_always_on_top; /* -notop */
+    /* Task 1 & 2 Flag Maps */
+    bool hide_seconds;             /* -noseconds */
+    bool disable_outline;          /* -nooutline */
+    bool use_decorations;          /* -decorations */
+    bool disable_always_on_top;    /* -notop */
 
     /* Dynamic Theme Overrides */
-    SDL_Color tie_color;        /* -tiecolor */
-    SDL_Color pupil_color;      /* -pupilcolor */
-    SDL_Color cat_color;        /* -catcolor */
-    SDL_Color hour_color;       /* -hourcolor */
-    SDL_Color minute_color;     /* -minutecolor */
-    SDL_Color second_color;     /* -secondcolor */
+    SDL_Color tie_color;           /* -tiecolor */
+    SDL_Color pupil_color;         /* -pupilcolor */
+    SDL_Color cat_color;           /* -catcolor */
+    SDL_Color hour_color;          /* -hourcolor */
+    SDL_Color minute_color;        /* -minutecolor */
+    SDL_Color second_color;        /* -secondcolor */
+    SDL_Color detail_color;        /* -detailcolor */
+    SDL_Color sclera_color;        /* -scleracolor */
+    SDL_Color window_bg_color;     /* Optional -decorations hex override */
 } CatClock_AppContext;
 
 /* CRITICAL LINK FIX: Broaden visibility context scope to global compiler translation units */

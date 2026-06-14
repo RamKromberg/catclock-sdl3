@@ -2,6 +2,7 @@
    FILE: catclock_eyes.c (Stateless Mathematical Pupil Oval Shader)
    ============================================================================= */
 #include "catclock_shared.h"
+#include <SDL3/SDL.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -42,10 +43,6 @@ static void LocalDrawHardwarePupilOval(SDL_Renderer *renderer, float cx, float c
     SDL_free(indices);
 }
 
-#include "catclock_shared.h"
-#include <SDL3/SDL.h>
-#include <math.h>
-
 void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata) {
     if (!renderer) return;
     (void)userdata;
@@ -59,10 +56,32 @@ void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float s
     float max_offset_x = 7.0f * scale;
 
     SDL_Color active_pupil_color = ctx.pupil_color;
+    SDL_Color active_sclera_color = ctx.sclera_color;
 
-    /* RESTORED ORIGINAL BASICS: Pure whole integer midpoints to protect the 3D perspective math */
-    float true_center_x = (float)(int)(cell_w / 2);
-    float true_center_y = (float)(int)(cell_h / 2);
+    float true_center_x = (float)(cell_w / 2);
+    float true_center_y = (float)(cell_h / 2);
 
+    /*
+     * SHADER RECTANGLE BOUNDS ADJUSTMENT (23x23 ALIGNMENT):
+     * The original socket asset is 23 pixels wide, but the cell framework is 24x24.
+     * We subtract 1.0f * scale from the width to prevent the extra pixel from leaking color.
+     * Offsetting the X-coordinate rightward by 0.5f * scale ensures the background fill is
+     * perfectly centered over the 23-pixel socket shape with zero gaps on either side!
+     */
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(renderer, active_sclera_color.r, active_sclera_color.g, active_sclera_color.b, 255);
+
+    SDL_FRect local_cell_bounds = {
+        0.5f * scale,
+        0.0f,
+        (float)cell_w - (2.0f * scale),
+        (float)cell_h
+    };
+    SDL_RenderFillRect(renderer, &local_cell_bounds);
+
+    /* Restore normal drawing blend mode to layer the moving pupil cleanly on top */
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    /* Layer the moving geometric pupil directly over our custom sclera background color */
     LocalDrawHardwarePupilOval(renderer, true_center_x, true_center_y, base_w, base_h, sinf(swing_angle), max_offset_x, active_pupil_color);
 }

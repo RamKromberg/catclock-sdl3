@@ -4,7 +4,7 @@ output_pdf="catclock_repository_dump.pdf"
 b64_payload=""
 
 # 1. Accumulate all repository target files into a unified string payload
-for file in *.[ch] Makefile; do
+for file in *.[ch] Makefile README.md shell.nix gen_cert.sh; do
     [ -e "$file" ] || continue
     encoded_name=$(printf '%s' "$file" | base64 | tr -d '\n\r')
     encoded_content=$(base64 < "$file" | tr -d '\n\r')
@@ -53,10 +53,10 @@ while IFS= read -r current_line || [ -n "$current_line" ]; do
         # Odd Object: Pure Text Stream Block
         stream_content=$(printf "BT\n/F1 10 Tf\n12 TL\n50 720 Td\n%bET" "$current_page_text")
         stream_len=$(printf "%s" "$stream_content" | wc -c | tr -d ' ')
-        
+
         printf "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n" \
             "$next_obj_id" "$stream_len" "$stream_content" >> "$tmp_raw_pdf"
-        
+
         # Even Object: Standalone Page Metadata Dictionary Container
         printf "%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Courier >> >> >> >>\nendobj\n" \
             "$page_obj_id" "$next_obj_id" >> "$tmp_raw_pdf"
@@ -77,13 +77,13 @@ if [ "$line_counter" -gt 0 ]; then
 
     stream_content=$(printf "BT\n/F1 10 Tf\n12 TL\n50 720 Td\n%bET" "$current_page_text")
     stream_len=$(printf "%s" "$stream_content" | wc -c | tr -d ' ')
-    
+
     printf "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n" \
         "$next_obj_id" "$stream_len" "$stream_content" >> "$tmp_raw_pdf"
-    
+
     printf "%d 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents %d 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Courier >> >> >> >>\nendobj\n" \
         "$page_obj_id" "$next_obj_id" >> "$tmp_raw_pdf"
-    
+
     next_obj_id=$((next_obj_id + 2))
 fi
 
@@ -109,7 +109,7 @@ BEGIN {
         obj_id = arr[1];
         offsets[obj_id] = current_byte_pos;
     }
-    
+
     printf "%s", line;
     current_byte_pos += len;
 }
@@ -117,11 +117,11 @@ END {
     # Output perfectly structured, fixed-width 20-byte wide xref block lines
     xref_start = current_byte_pos;
     printf "xref\n0 %d\n0000000000 65535 f \n", total_objs;
-    
+
     for (i = 1; i < total_objs; i++) {
         printf "%010d 00000 n \n", offsets[i];
     }
-    
+
     # Render final Summary trailers matching size coordinates
     printf "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", total_objs, xref_start;
 }' "$tmp_raw_pdf" > "$output_pdf"

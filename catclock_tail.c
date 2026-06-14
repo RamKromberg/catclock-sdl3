@@ -28,7 +28,7 @@ void CatClock_ShaderTail(SDL_Renderer *renderer, int cell_w, int cell_h, float s
     float TOTAL_CYCLE_FRAMES = 60.0f;
 
     /* 2. The maximum negative deflection angle (reaching toward screen's left / cat's right). */
-    float MAX_LEFT_ANGLE_DEG  = -20.0f;
+    float MAX_LEFT_ANGLE_DEG  = -19.5f;
 
     /* 3. The maximum positive deflection angle (reaching toward screen's right / cat's left). */
     float MAX_RIGHT_ANGLE_DEG = 30.0f;
