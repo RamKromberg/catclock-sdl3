@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -O2 $(shell pkg-config --cflags sdl3)
 LIBS = $(shell pkg-config --libs sdl3) -lm
 
 TARGET = catclock-sdl3
-SRCS = catclock_main.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
+SRCS = catclock_main.c catclock_xbm.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 

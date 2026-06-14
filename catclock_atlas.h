@@ -33,6 +33,14 @@
 #define HAND_TYPE_MINUTE  1
 #define HAND_TYPE_SECOND  2
 
+SDL_Texture* CatClock_CompileEyesAtlasRGBA4444(SDL_Renderer *renderer,
+                                               const unsigned char *xbm_mask_bytes,
+                                               const unsigned char *pupil_alpha_src,
+                                               int mask_w, int mask_h,
+                                               int total_frames,
+                                               SDL_Color eyes_mask_color,
+                                               SDL_Color pupil_color);
+
 /* Generalized Scale-Aware Pre-Baked Texture Blueprint */
 typedef struct {
     SDL_Texture *texture;
@@ -56,5 +64,8 @@ void RenderBakedClockHandToPipeline(SDL_Renderer *renderer, int hand_type, int p
 /* Main Loop Linker Compatibility Remappings */
 void BakeClockHandsAtlases(SDL_Renderer *renderer);
 void FreeClockHandsAtlases(void);
+
+/* Insert directly inside catclock_atlas.h right before #endif */
+void CatClock_ShaderTailHaloBake(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
 #endif /* CATCLOCK_ATLAS_H */
