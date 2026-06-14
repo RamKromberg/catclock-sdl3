@@ -3,7 +3,7 @@ CFLAGS = -Wall -Wextra -O2 $(shell pkg-config --cflags sdl3)
 LIBS = $(shell pkg-config --libs sdl3) -lm
 
 TARGET = catclock-sdl3
-SRCS = catclock_main.c catclock_xbm.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
+SRCS = catclock_main.c catclock_args.c catclock_xbm.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 
@@ -38,6 +38,10 @@ $(TARGET): $(OBJS)
 # Pattern rule for cross-compilation objects
 %.win.o: %.c catclock_shared.h catclock_atlas.h
 	$(WIN_CC) $(WIN_CFLAGS) -c $< -o $@
+
+# Deterministic source formatting utility target
+format:
+	clang-format -i $(SRCS) catclock_shared.h catclock_atlas.h
 
 # Prevent GNU Make from deleting resource.rc and your specific icon asset as intermediates
 .SECONDARY: resource.rc catclock_icon.ico
@@ -139,10 +143,10 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 # Clean built build artifacts, object files, and resources
 clean:
 	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png catclock-sdl3_resource.o
-	rm -f  resource.rc catclock_icon.ico
+	rm -f resource.rc catclock_icon.ico
 
 # Clean heavy downloaded packages and extracted system DLLs
 clean-dist: clean
 	rm -f $(SDL_DLL) $(SDL_ZIP)
 
-.PHONY: all windows clean clean-dist
+.PHONY: all windows clean clean-dist format

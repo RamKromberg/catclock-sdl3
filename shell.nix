@@ -13,6 +13,7 @@ pkgs.mkShell {
     imagemagick
     osslsigncode
     openssl
+    clang-tools
   ];
 
   buildInputs = [
@@ -30,6 +31,10 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:40:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:40:00" xclock
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
+    if [ -d .git ]; then
+        git config core.pager "less -x4"
+    fi
+
     export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
 
     # Export the dev prefix for compilation headers/import libs
@@ -38,10 +43,11 @@ pkgs.mkShell {
     # NEW: Capture the runtime package path where the real Windows DLL lives
     export WINDOWS_SDL_BIN="${windowsPkgs.sdl3.bin or windowsPkgs.sdl3}"
 
-    echo "=============================================================="
+    echo "=================================================="
     echo " Kit-Cat Clock Cross-Platform Compiler Shell Active "
     echo "   -> Run 'make' to compile for native Linux"
+    echo "   -> Run 'make format' to format code using WebKit style"
     echo "   -> Run 'make windows' to cross-compile for Windows (.exe)"
-    echo "=============================================================="
+    echo "=================================================="
   '';
 }

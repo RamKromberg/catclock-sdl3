@@ -1,0 +1,4 @@
+# Enforce layout rendering standards for C source files
+*.c      whitespace=tabwidth=4
+*.h      whitespace=tabwidth=4
+Makefile whitespace=tabwidth=4
