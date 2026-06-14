@@ -1,6 +1,3 @@
-/* =============================================================================
-   FILE: catclock_main.c (Application Entrypoint Linker Module)
-   ============================================================================= */
 #include "catclock_shared.h"
 #include <stdlib.h>
 #include <string.h>
@@ -8,93 +5,195 @@
 #include <stdio.h>
 #include <math.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#define localtime(X) (_X64_or_X86_struct_tm_fallback(X))
+static struct tm* _X64_or_X86_struct_tm_fallback(const time_t* timer) {
+    static struct tm result;
+    localtime_s(&result, timer);
+    return &result;
+}
+#endif
+
+#ifndef _WIN32
+#include <malloc.h>
+#endif
+
+CatClock_AppContext ctx = {0};
+
 int ssaa_factor = 2;
-int target_fps_limit = 60;
+int target_fps_limit = 30;
 
 static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window *win, const SDL_Point *area, void *data) {
     (void)win; (void)area; (void)data;
     return SDL_HITTEST_DRAGGABLE;
 }
 
+static void PrintHelpDocumentation(const char *program_name) {
+    printf("Kit-Cat Desktop Widget Clock (SDL3 Engine Re-Port)\n");
+    printf("Usage: %s [flags]\n\n", program_name);
+    printf("Available Flags:\n");
+    printf("  --help              Display this interface parameter map.\n");
+    printf("  -noseconds          Completely hide the sweeping seconds hand.\n");
+    printf("  -nooutline          Disable the form-fitting 1px white halo background.\n");
+    printf("  -decorations        Restore standard desktop frame borders & window title-bars.\n");
+    printf("  -notop              Disable the forced 'Always on Top' window layer pinning.\n");
+    printf("  -fps [1-120]        Set a custom target frame rate pacing limit (Default: 30).\n");
+    printf("  -catcolor [hex]     Override default black cat body base layout (Default: 000000).\n");
+    printf("  -tiecolor [hex]     Override default necktie hex color channel (Default: fdfdfd).\n");
+    printf("  -pupilcolor [hex]   Override moving eye pupil hex color channel (Default: 000000).\n");
+    printf("  -hourcolor [hex]    Override default hour clock hand hex color (Default: 000000).\n");
+    printf("  -minutecolor [hex]  Override default minute clock hand hex color (Default: 000000).\n");
+    printf("  -secondcolor [hex]  Override default sweeping second hand hex color (Default: ff0000).\n");
+}
+
 static void ParseCommandLineArguments(int argc, char *argv[], CatClock_AppContext *ctx) {
     ctx->fg_color = (SDL_Color){ 0, 0, 0, 255 };
     ctx->bg_color = (SDL_Color){ 255, 255, 255, 255 };
+    ctx->cat_color = (SDL_Color){ 0, 0, 0, 255 };
+    ctx->tie_color = (SDL_Color){ 255, 255, 255, 255 };
+    ctx->pupil_color = (SDL_Color){ 0, 0, 0, 255 };
+
+    ctx->hour_color = (SDL_Color){ 0, 0, 0, 255 };
+    ctx->minute_color = (SDL_Color){ 0, 0, 0, 255 };
+    ctx->second_color = (SDL_Color){ 255, 0, 0, 255 };
     ctx->current_scale = 1.0f;
 
+    ctx->hide_seconds = false;
+    ctx->disable_outline = false;
+    ctx->use_decorations = false;
+    ctx->disable_always_on_top = false;
+
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-fps") == 0 && (i + 1) < argc) {
-            target_fps_limit = atoi(argv[++i]);
-            if (target_fps_limit < 1) target_fps_limit = 60;
-        }
-        else if (strcmp(argv[i], "-fg") == 0 && (i + 1) < argc) {
-            char *color_str = argv[++i];
-            if (strlen(color_str) == 6) {
-                unsigned int r, g, b;
-                if (sscanf(color_str, "%02x%02x%02x", &r, &g, &b) == 3) {
-                    ctx->fg_color = (SDL_Color){ (Uint8)r, (Uint8)g, (Uint8)b, 255 };
-                }
+        if (strcmp(argv[i], "--help") == 0) {
+            /* FIXED: Pass the scalar program name string pointer */
+            PrintHelpDocumentation(argv[0]);
+            exit(0);
+        } else if (strcmp(argv[i], "-noseconds") == 0) {
+            ctx->hide_seconds = true;
+        } else if (strcmp(argv[i], "-nooutline") == 0) {
+            ctx->disable_outline = true;
+        } else if (strcmp(argv[i], "-decorations") == 0) {
+            ctx->use_decorations = true;
+        } else if (strcmp(argv[i], "-notop") == 0) {
+            ctx->disable_always_on_top = true;
+        } else if (strcmp(argv[i], "-catcolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++; /* FIXED: Proper dereferenced character check */
+                size_t len = strlen(hex);
+                unsigned int r = 0, g = 0, b = 0;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->cat_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->cat_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
+                ctx->fg_color = ctx->cat_color;
             }
-        }
-        else if (strcmp(argv[i], "-bg") == 0 && (i + 1) < argc) {
-            char *color_str = argv[++i];
-            if (strlen(color_str) == 6) {
-                unsigned int r, g, b;
-                if (sscanf(color_str, "%02x%02x%02x", &r, &g, &b) == 3) {
-                    ctx->bg_color = (SDL_Color){ (Uint8)r, (Uint8)g, (Uint8)b, 255 };
-                }
+        } else if (strcmp(argv[i], "-tiecolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++;
+                size_t len = strlen(hex);
+                unsigned int r = 255, g = 255, b = 255;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->tie_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->tie_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
             }
+        } else if (strcmp(argv[i], "-pupilcolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++;
+                size_t len = strlen(hex);
+                unsigned int r = 0, g = 0, b = 0;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->pupil_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->pupil_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
+            }
+        } else if (strcmp(argv[i], "-hourcolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++;
+                size_t len = strlen(hex);
+                unsigned int r = 0, g = 0, b = 0;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->hour_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->hour_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
+            }
+        } else if (strcmp(argv[i], "-minutecolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++;
+                size_t len = strlen(hex);
+                unsigned int r = 0, g = 0, b = 0;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->minute_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->minute_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
+            }
+        } else if (strcmp(argv[i], "-secondcolor") == 0) {
+            if ((i + 1) < argc) {
+                const char *hex = argv[++i];
+                if (hex[0] == '#') hex++;
+                size_t len = strlen(hex);
+                unsigned int r = 255, g = 0, b = 0;
+                if (len == 6 && sscanf(hex, "%02x%02x%02x", &r, &g, &b) == 3) ctx->second_color = (SDL_Color){(Uint8)r,(Uint8)g,(Uint8)b,255};
+                else if (len == 3 && sscanf(hex, "%1x%1x%1x", &r, &g, &b) == 3) ctx->second_color = (SDL_Color){(Uint8)(r*17),(Uint8)(g*17),(Uint8)(b*17),255};
+            }
+        } else if (strcmp(argv[i], "-fps") == 0) {
+            if ((i + 1) < argc) {
+                int parsed_fps = atoi(argv[++i]);
+                if (parsed_fps >= 1 && parsed_fps <= 120) target_fps_limit = parsed_fps;
+            } else {
+                PrintHelpDocumentation(argv[0]);
+                exit(1);
+            }
+        } else {
+            fprintf(stderr, "Unknown parameter layout flag detected: %s\n", argv[i]);
+            PrintHelpDocumentation(argv[0]);
+            exit(1);
         }
     }
 }
 
 int main(int argc, char *argv[]) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) return 1;
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        return 1;
+    }
 
-    CatClock_AppContext ctx = {0};
     ParseCommandLineArguments(argc, argv, &ctx);
 
     int target_w = (int)(BASELINE_CANVAS_W * ctx.current_scale);
     int target_h = (int)(BASELINE_CANVAS_H * ctx.current_scale);
 
-    SDL_Window *window = SDL_CreateWindow(
-        "CatClock-SDL3 Widget Core",
-        target_w, target_h,
-        SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT | SDL_WINDOW_ALWAYS_ON_TOP
-    );
+    SDL_WindowFlags window_flags = 0;
 
+    if (!ctx.use_decorations) {
+        window_flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT;
+    }
+    if (!ctx.disable_always_on_top) {
+        window_flags |= SDL_WINDOW_ALWAYS_ON_TOP;
+    }
+
+    SDL_Window *window = SDL_CreateWindow("CatClock-SDL3 Widget Core", target_w, target_h, window_flags);
     if (!window) {
         SDL_Quit();
         return 1;
     }
 
     SDL_SetWindowHitTest(window, WidgetWindowHitTest, NULL);
+
+#ifdef _WIN32
+    if (ctx.use_decorations) {
+        SDL_PropertiesID window_props = SDL_GetWindowProperties(window);
+        HWND hwnd = (HWND)SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+        if (hwnd) {
+            LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            style &= ~(WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
+            SetWindowLongPtr(hwnd, GWL_STYLE, style);
+            SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+    }
+#endif
+
     SDL_Renderer *renderer = SDL_CreateRenderer(window, NULL);
     if (!renderer) {
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
-
-    /* Initialize Clean Stateless Targets */
-    ctx.hands_atlas.texture = NULL;
-    ctx.hands_atlas.src_rects = NULL;
-    ctx.hands_atlas.last_scale = -1.0f;
-
-    ctx.minutes_atlas.texture = NULL;
-    ctx.minutes_atlas.src_rects = NULL;
-    ctx.minutes_atlas.last_scale = -1.0f;
-
-    ctx.seconds_atlas.texture = NULL;
-    ctx.seconds_atlas.src_rects = NULL;
-    ctx.seconds_atlas.last_scale = -1.0f;
-
-    ctx.eyes_atlas.texture = NULL;
-    ctx.eyes_atlas.src_rects = NULL;
-    ctx.eyes_atlas.last_scale = -1.0f;
-
-    ctx.tail_atlas.texture = NULL;
-    ctx.tail_atlas.src_rects = NULL;
-    ctx.tail_atlas.last_scale = -1.0f;
 
     SDL_GetRenderOutputSize(renderer, &ctx.current_win_w, &ctx.current_win_h);
     ctx.xbm_lib = CatClock_InitXbmLibrary(renderer);
@@ -109,49 +208,34 @@ int main(int argc, char *argv[]) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
-            }
-            else if (event.type == SDL_EVENT_KEY_DOWN) {
+            } else if (event.type == SDL_EVENT_KEY_DOWN) {
                 if (event.key.key == SDLK_ESCAPE) {
                     running = false;
-                }
-                /* Handle Precise Keyboard Zoom Bindings */
-                else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS || event.key.key == SDLK_KP_PLUS) {
+                } else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS || event.key.key == SDLK_KP_PLUS) {
                     float old_scale = ctx.current_scale;
                     ctx.current_scale += 0.5f;
                     if (ctx.current_scale > 10.0f) ctx.current_scale = 10.0f;
-
                     if (ctx.current_scale != old_scale) {
-                        int next_w = (int)(BASELINE_CANVAS_W * ctx.current_scale);
-                        int next_h = (int)(BASELINE_CANVAS_H * ctx.current_scale);
-                        SDL_SetWindowSize(window, next_w, next_h);
+                        SDL_SetWindowSize(window, (int)(BASELINE_CANVAS_W * ctx.current_scale), (int)(BASELINE_CANVAS_H * ctx.current_scale));
                         CatClock_OnWindowResize(NULL, &ctx, renderer);
                     }
-                }
-                else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+                } else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
                     float old_scale = ctx.current_scale;
                     ctx.current_scale -= 0.5f;
                     if (ctx.current_scale < 0.5f) ctx.current_scale = 0.5f;
-
                     if (ctx.current_scale != old_scale) {
-                        int next_w = (int)(BASELINE_CANVAS_W * ctx.current_scale);
-                        int next_h = (int)(BASELINE_CANVAS_H * ctx.current_scale);
-                        SDL_SetWindowSize(window, next_w, next_h);
+                        SDL_SetWindowSize(window, (int)(BASELINE_CANVAS_W * ctx.current_scale), (int)(BASELINE_CANVAS_H * ctx.current_scale));
                         CatClock_OnWindowResize(NULL, &ctx, renderer);
                     }
                 }
-            }
-            else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+            } else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
                 float old_scale = ctx.current_scale;
-                if (event.wheel.y > 0.0f)      ctx.current_scale += 0.5f;
-                else if (event.wheel.y < 0.0f) ctx.current_scale -= 0.5f;
-
-                if (ctx.current_scale < 0.5f)  ctx.current_scale = 0.5f;
-                if (ctx.current_scale > 10.0f) ctx.current_scale = 10.0f;
-
+                if (event.wheel.y > 0.0f)       ctx.current_scale += 0.5f;
+                else if (event.wheel.y < 0.0f)  ctx.current_scale -= 0.5f;
+                if (ctx.current_scale < 0.5f)   ctx.current_scale = 0.5f;
+                if (ctx.current_scale > 10.0f)  ctx.current_scale = 10.0f;
                 if (ctx.current_scale != old_scale) {
-                    int next_w = (int)(BASELINE_CANVAS_W * ctx.current_scale);
-                    int next_h = (int)(BASELINE_CANVAS_H * ctx.current_scale);
-                    SDL_SetWindowSize(window, next_w, next_h);
+                    SDL_SetWindowSize(window, (int)(BASELINE_CANVAS_W * ctx.current_scale), (int)(BASELINE_CANVAS_H * ctx.current_scale));
                     CatClock_OnWindowResize(NULL, &ctx, renderer);
                 }
             }
@@ -163,8 +247,8 @@ int main(int argc, char *argv[]) {
         int minute_phase = time_info->tm_min % 60;
         int second_phase = time_info->tm_sec % 60;
 
-        float current_phase_angle = (float)(SDL_GetTicks() % CYCLE_PERIOD_MS) / (float)CYCLE_PERIOD_MS * (2.0f * (float)M_PI);
-        float sway_deg = sinf(current_phase_angle) * 8.0f;
+        float angle = (float)(SDL_GetTicks() % CYCLE_PERIOD_MS) / (float)CYCLE_PERIOD_MS * (2.0f * (float)M_PI);
+        float sway_deg = sinf(angle) * 8.0f;
 
         CatClock_SynchronizePipelineAtlases(renderer, &ctx, sway_deg, hour_phase, minute_phase, second_phase);
 
@@ -203,6 +287,5 @@ int main(int argc, char *argv[]) {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-
     return 0;
 }

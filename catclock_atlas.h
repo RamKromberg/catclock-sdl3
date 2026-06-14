@@ -38,7 +38,7 @@ SDL_Texture* CatClock_CompileEyesAtlasRGBA4444(SDL_Renderer *renderer,
                                                const unsigned char *pupil_alpha_src,
                                                int mask_w, int mask_h,
                                                int total_frames,
-                                               SDL_Color sclera_color,
+                                               SDL_Color eyes_mask_color,
                                                SDL_Color pupil_color);
 
 /* Generalized Scale-Aware Pre-Baked Texture Blueprint */

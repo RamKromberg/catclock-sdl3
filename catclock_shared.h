@@ -1,6 +1,3 @@
-/* =============================================================================
-   FILE: catclock_shared.h (Standardized Cross-Module Type Architecture)
-   ============================================================================= */
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
@@ -16,20 +13,8 @@
 #define CYCLE_PERIOD_MS   2000
 #define TOTAL_PHASES      60
 
-/* Asset Layer Hand Typings */
-#define HAND_TYPE_HOUR    0
-#define HAND_TYPE_MINUTE  1
-#define HAND_TYPE_SECOND  2
-
-typedef struct {
-    float x;
-    float y;
-} OriginalPoint;
-
-/* Standardized Compute Pass Layout Structure */
 typedef void (*CatClock_ShaderCallback)(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
-/* Pure, Scale-Aware Pre-Baked Texture Metadata Framework */
 typedef struct {
     SDL_Texture *texture;
     int total_frames;
@@ -41,6 +26,7 @@ typedef struct {
 
 typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
 
+/* Unified App Context with Feature Restoration Flags */
 typedef struct {
     int current_win_w;
     int current_win_h;
@@ -51,7 +37,7 @@ typedef struct {
     SDL_Color fg_color;
     SDL_Color bg_color;
 
-    /* Decoupled Lifecycles to Ensure Sharp Multi-Color Blending Profiles */
+    /* Decoupled Lifecycles for Sharp Multi-Color Blending */
     CatClock_ComputeAtlas hands_atlas;
     CatClock_ComputeAtlas minutes_atlas;
     CatClock_ComputeAtlas seconds_atlas;
@@ -61,8 +47,27 @@ typedef struct {
     CatClock_XbmLibrary *xbm_lib;
     SDL_Texture *master_composite_layer;
     SDL_Texture *halo_layer;
+
+    /* Dedicated Eye Mask Hardware VRAM Surface */
+    SDL_Texture *eye_clipping_stencil;
+
+    /* Task 1 Flag Maps */
+    bool hide_seconds;          /* -noseconds */
+    bool disable_outline;       /* -nooutline */
+    bool use_decorations;       /* -decorations */
+    bool disable_always_on_top; /* -notop */
+
+    /* Dynamic Theme Overrides */
+    SDL_Color tie_color;        /* -tiecolor */
+    SDL_Color pupil_color;      /* -pupilcolor */
+    SDL_Color cat_color;        /* -catcolor */
+    SDL_Color hour_color;       /* -hourcolor */
+    SDL_Color minute_color;     /* -minutecolor */
+    SDL_Color second_color;     /* -secondcolor */
 } CatClock_AppContext;
 
+/* CRITICAL LINK FIX: Broaden visibility context scope to global compiler translation units */
+extern CatClock_AppContext ctx;
 extern int ssaa_factor;
 extern int target_fps_limit;
 
@@ -75,15 +80,8 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary *lib);
 void CatClock_RenderXbmLayer(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, const char *layer_id, SDL_Color color);
 void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, const char *layer_id, SDL_Color color, float offset_x, float offset_y);
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, SDL_Color color);
-SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const char *path, SDL_Color color, bool invert_mask);
 
-/* Centralized Lifecycle Manager Pipeline Drivers */
 void CatClock_RebakeComputeAtlas(SDL_Renderer *renderer, CatClock_ComputeAtlas *atlas, int cell_base_w, int cell_base_h, int total_frames, int cols, CatClock_ShaderCallback shader, void *userdata);
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas *atlas);
-
-/* Stateless Asset Pass Callbacks */
-void CatClock_ShaderHands(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
-void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
-void CatClock_ShaderTail(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
 #endif /* CATCLOCK_SHARED_H */

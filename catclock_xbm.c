@@ -1,6 +1,6 @@
-/* ==========================================================================
+/* ============================================================================
    FILE: catclock_xbm.c (Optimized 32-Byte Struct Memory Packing)
-   ========================================================================== */
+   ============================================================================ */
 #include "catclock_shared.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +20,9 @@ struct CatClock_XbmLibrary {
     XbmAssetNode eyes;
 };
 
+/* --- CRITICAL ARCHITECTURAL FIX: EXPLICIT FORWARD DECLARATION --- */
+SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const char *path, SDL_Color color, bool invert_mask);
+
 static void BuildRuntimeNodeTextureRGBA4444(SDL_Renderer *renderer, XbmAssetNode *node, const char *path, const char *name, SDL_Color color, bool invert_mask)
 {
     if (!node || !path || !name) return;
@@ -37,18 +40,18 @@ static void BuildRuntimeNodeTextureRGBA4444(SDL_Renderer *renderer, XbmAssetNode
 
 CatClock_XbmLibrary *CatClock_InitXbmLibrary(SDL_Renderer *renderer)
 {
-    fprintf(stderr, "[DIAGNOSTIC INFO] Initializing runtime filesystem XBM asset parser...\n");
     CatClock_XbmLibrary *lib = calloc(1, sizeof(CatClock_XbmLibrary));
     if (!lib) return NULL;
 
     SDL_Color texture_mask_base = { 255, 255, 255, 255 };
-    SDL_Color neck_tie          = { 180, 20,  20,  255 };
-    SDL_Color eye_sclera        = { 255, 255, 255, 255 };
+    SDL_Color eyes_mask         = { 255, 255, 255, 255 };
+    SDL_Color neck_tie          = ctx.tie_color;
 
+    /* FIXED: Compile catback with standard mask base so alpha color modding traces correctly */
     BuildRuntimeNodeTextureRGBA4444(renderer, &lib->catback,  "./assets/catback.xbm",  "catback",  texture_mask_base, false);
     BuildRuntimeNodeTextureRGBA4444(renderer, &lib->catwhite, "./assets/catwhite.xbm", "catwhite", texture_mask_base, false);
     BuildRuntimeNodeTextureRGBA4444(renderer, &lib->cattie,   "./assets/cattie.xbm",   "cattie",   neck_tie,          false);
-    BuildRuntimeNodeTextureRGBA4444(renderer, &lib->eyes,     "./assets/eyes.xbm",     "eyes",     eye_sclera,         true);
+    BuildRuntimeNodeTextureRGBA4444(renderer, &lib->eyes,     "./assets/eyes.xbm",     "eyes",     eyes_mask,         true);
 
     return lib;
 }
@@ -205,7 +208,6 @@ SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const cha
         SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
 
         // Force the GPU to sample edges sharply using nearest-neighbor
-        // This eliminates all fuzzy artifacts and brings back pixel-perfect edges!
         SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
     }
 
@@ -213,15 +215,11 @@ SDL_Texture* CatClock_LoadDynamicXbmToRGBA4444(SDL_Renderer *renderer, const cha
     return tex;
 }
 
-/*
- * Safely updates the hardware scale mode of an encapsulated asset layer.
- * Allows external files to modulate rendering sharp/linear states.
- */
 void CatClock_SetXbmLayerScaleMode(CatClock_XbmLibrary *lib, const char *layer_id, SDL_ScaleMode mode) {
     if (!lib || !layer_id) return;
 
     XbmAssetNode *target = NULL;
-    if (SDL_strcmp(layer_id, "catback") == 0)   target = &lib->catback;
+    if (SDL_strcmp(layer_id, "catback") == 0)       target = &lib->catback;
     else if (SDL_strcmp(layer_id, "catwhite") == 0) target = &lib->catwhite;
     else if (SDL_strcmp(layer_id, "cattie") == 0)   target = &lib->cattie;
     else if (SDL_strcmp(layer_id, "eyes") == 0)     target = &lib->eyes;
@@ -231,15 +229,11 @@ void CatClock_SetXbmLayerScaleMode(CatClock_XbmLibrary *lib, const char *layer_i
     }
 }
 
-/*
- * Safely updates the hardware blend mode of an encapsulated asset layer texture.
- * Prevents cross-file compilation errors with incomplete typedefs.
- */
 void CatClock_SetXbmLayerBlendMode(CatClock_XbmLibrary *lib, const char *layer_id, SDL_BlendMode mode) {
     if (!lib || !layer_id) return;
 
     XbmAssetNode *target = NULL;
-    if (SDL_strcmp(layer_id, "catback") == 0)      target = &lib->catback;
+    if (SDL_strcmp(layer_id, "catback") == 0)     target = &lib->catback;
     else if (SDL_strcmp(layer_id, "catwhite") == 0) target = &lib->catwhite;
     else if (SDL_strcmp(layer_id, "cattie") == 0)   target = &lib->cattie;
     else if (SDL_strcmp(layer_id, "eyes") == 0)     target = &lib->eyes;
@@ -249,47 +243,33 @@ void CatClock_SetXbmLayerBlendMode(CatClock_XbmLibrary *lib, const char *layer_i
     }
 }
 
-/*
- * Renders the 1px white body halo background outline.
- * Enforces strict additive hardware alpha tracking to prevent black silhouettes.
- */
-void CatClock_RenderHaloOutline(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, SDL_Color color)
-{
+void CatClock_RenderHaloOutline(CatClock_XbmLibrary *lib, SDL_Renderer *renderer, SDL_Color color) {
     if (!lib || !renderer || !lib->catback.texture) return;
 
-    // 1. Force crisp nearest-neighbor edge sampling during the trace pass
     SDL_SetTextureScaleMode(lib->catback.texture, SDL_SCALEMODE_NEAREST);
 
-    // 2. Setup custom hardware blending factors to protect the background alpha channel.
-    // This stops transparent source sections from overriding color bytes on a clear canvas.
     SDL_BlendMode protective_halo_mode = SDL_ComposeCustomBlendMode(
         SDL_BLENDFACTOR_ONE,                 // Source Color Factor
         SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, // Destination Color Factor
         SDL_BLENDOPERATION_ADD,              // Color Operation
         SDL_BLENDFACTOR_ONE,                 // Source Alpha Factor
-        SDL_BLENDFACTOR_ONE,                 // Destination Alpha Factor (Strict Additive Alpha)
+        SDL_BLENDFACTOR_ONE,                 // Destination Alpha Factor
         SDL_BLENDOPERATION_ADD               // Alpha Operation
     );
     SDL_SetTextureBlendMode(lib->catback.texture, protective_halo_mode);
 
-    // 3. Configure the color and visibility modulators natively matching the parameters passed
     SDL_SetTextureColorMod(lib->catback.texture, color.r, color.g, color.b);
     SDL_SetTextureAlphaMod(lib->catback.texture, color.a);
 
-    // 4. Run the 1px offset loop inside the logical canvas presentation bounds
-    for (float dx = -1.0f; dx <= 1.0f; dx += 1.0f)
-    {
-        for (float dy = -1.0f; dy <= 1.0f; dy += 1.0f)
-        {
+    for (float dx = -1.0f; dx <= 1.0f; dx += 1.0f) {
+        for (float dy = -1.0f; dy <= 1.0f; dy += 1.0f) {
             if (dx == 0.0f && dy == 0.0f) continue;
 
-            // Build destination tracking rect natively
-            SDL_FRect dst = { dx, dy, (float)lib->catback.w, (float)lib->catback.h };
+            SDL_FRect dst = { dx, dy, BASELINE_CANVAS_W, BASELINE_CANVAS_H };
             SDL_RenderTexture(renderer, lib->catback.texture, NULL, &dst);
         }
     }
 
-    // 5. Restore the catback texture parameters back to standard blending for Pass 4
     SDL_SetTextureBlendMode(lib->catback.texture, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(lib->catback.texture, SDL_SCALEMODE_NEAREST);
 }

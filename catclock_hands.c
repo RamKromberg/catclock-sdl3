@@ -2,6 +2,7 @@
    FILE: catclock_hands.c (Stateless Aspect-Compensated Geometry Hands Shader)
    ============================================================================= */
 #include "catclock_shared.h"
+#include "catclock_atlas.h"
 #include <math.h>
 #include <stdlib.h>
 
@@ -37,7 +38,7 @@ void CatClock_ShaderHands(SDL_Renderer *renderer, int cell_w, int cell_h, float 
     }
     else if (cfg->hand_type == HAND_TYPE_SECOND) {
         base_length = (float)cell_w * 0.46f;
-        thickness   = 1.5f * scale;
+        thickness   = 2.5f * scale;
         pivot_back  = 6.0f * scale;
     }
 

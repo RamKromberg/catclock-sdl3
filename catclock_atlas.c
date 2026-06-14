@@ -1,10 +1,13 @@
-/* =============================================================================
-   FILE: catclock_atlas.c (Centralized Lifecycle Driver Engine)
-   ============================================================================= */
 #include "catclock_shared.h"
+#include "catclock_atlas.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
+
+extern void CatClock_ShaderTail(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, const SDL_Color *color);
+extern void CatClock_ShaderHands(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
+extern void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata);
 
 typedef struct {
     int hand_type;
@@ -22,7 +25,6 @@ void CatClock_OnWindowResize(SDL_WindowEvent *resize_event, CatClock_AppContext 
     int output_w = 0, output_h = 0;
     if (SDL_GetRenderOutputSize(renderer, &output_w, &output_h)) {
         if (output_w != ctx->current_win_w || output_h != ctx->current_win_h) {
-            fprintf(stderr, "[DIAG_EVENT] Window Resize: %dx%d -> %dx%d\n", ctx->current_win_w, ctx->current_win_h, output_w, output_h);
             ctx->current_win_w = output_w;
             ctx->current_win_h = output_h;
             ctx->texture_cache_stale = true;
@@ -54,8 +56,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer *renderer, CatClock_ComputeAtlas *
     int atlas_w = cols * atlas->cell_w;
     int atlas_h = rows * atlas->cell_h;
 
-    fprintf(stderr, "[VRAM_ALLOC] 16-bit Target Pass Grid Created: %dx%d (Frames: %d, Scale: %.2f)\n", atlas_w, atlas_h, total_frames, scale);
-
     atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444, SDL_TEXTUREACCESS_TARGET, atlas_w, atlas_h);
     if (!atlas->texture) {
         SDL_free(atlas->src_rects);
@@ -64,7 +64,7 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer *renderer, CatClock_ComputeAtlas *
     }
 
     SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
-    SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_LINEAR);
+    SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
 
     SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
     SDL_SetRenderTarget(renderer, atlas->texture);
@@ -106,19 +106,13 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas *atlas) {
     atlas->last_scale = -1.0f;
 }
 
-/**
- * Specialized Sub-Pass Shader that replicates an unclipped 8-way geometric offset trace
- * to pre-bake a thick white background silhouette mask inside our temporary rendering buffer.
- */
 void CatClock_ShaderTailHaloBake(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata) {
     (void)userdata;
     SDL_Color white_cfg = { 255, 255, 255, 255 };
 
-    /* 8-Way micro-offsets mapped during geometry rasterization phase */
     float offsets_x[] = { -1.0f,  1.0f,  0.0f,  0.0f, -1.0f, -1.0f,  1.0f,  1.0f };
     float offsets_y[] = {  0.0f,  0.0f, -1.0f,  1.0f, -1.0f,  1.0f, -1.0f,  1.0f };
 
-    /* Preserve baseline viewport variables */
     SDL_Rect orig_viewport;
     SDL_GetRenderViewport(renderer, &orig_viewport);
 
@@ -132,8 +126,6 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer *renderer, int cell_w, int cell_h,
         SDL_SetRenderViewport(renderer, &offset_viewport);
         CatClock_ShaderTail(renderer, cell_w, cell_h, scale, frame_idx, &white_cfg);
     }
-
-    /* Restore clean cell viewport positioning */
     SDL_SetRenderViewport(renderer, &orig_viewport);
 }
 
@@ -142,92 +134,107 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppCon
     (void)sway_deg;
 
     int req_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
+    bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
 
-    if (!ctx->master_composite_layer || ctx->texture_cache_stale) {
+    /* Compute raw operational engine scale factor directly from current window boundaries */
+    int win_w = 0, win_h = 0;
+    SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
+    float runtime_scale = (float)win_w / BASELINE_CANVAS_W;
+    if (runtime_scale <= 0.0f) runtime_scale = 1.0f;
+
+/* Calculate specialized high-DPI stencil dimensions matching the strict 24x24 cell bounds worth of live data */
+    int calculated_cell_w = (int)ceilf(24.0f * runtime_scale);
+    int calculated_cell_h = (int)ceilf(24.0f * runtime_scale);
+    if (calculated_cell_w < 24) calculated_cell_w = 24;
+    if (calculated_cell_h < 24) calculated_cell_h = 24;
+
+    if (!ctx->master_composite_layer || ctx->texture_cache_stale || !ctx->eye_clipping_stencil) {
         if (ctx->master_composite_layer) {
             SDL_DestroyTexture(ctx->master_composite_layer);
             ctx->master_composite_layer = NULL;
         }
-
-        /* Force a clean, synchronized purge of old layouts across ALL active slots on scale event */
+        if (ctx->eye_clipping_stencil) {
+            SDL_DestroyTexture(ctx->eye_clipping_stencil);
+            ctx->eye_clipping_stencil = NULL;
+        }
         CatClock_DestroyComputeAtlas(&ctx->hands_atlas);
         CatClock_DestroyComputeAtlas(&ctx->minutes_atlas);
         CatClock_DestroyComputeAtlas(&ctx->seconds_atlas);
         CatClock_DestroyComputeAtlas(&ctx->eyes_atlas);
         CatClock_DestroyComputeAtlas(&ctx->tail_atlas);
 
-        /* If halo_layer was used as a texture raw pointer, clean it or reset metrics */
-        if (ctx->halo_layer) {
-            SDL_DestroyTexture(ctx->halo_layer);
-            ctx->halo_layer = NULL;
-        }
-
         ctx->master_composite_layer = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, ctx->current_win_w, ctx->current_win_h);
-        if (ctx->master_composite_layer) {
-            SDL_SetTextureBlendMode(ctx->master_composite_layer, SDL_BLENDMODE_BLEND);
-            SDL_SetTextureScaleMode(ctx->master_composite_layer, SDL_SCALEMODE_LINEAR);
-        }
+
+        /* ALLOCATING HIGH-RESOLUTION SCRATCHPAD SUB-SURFACE */
+        ctx->eye_clipping_stencil = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, calculated_cell_w, calculated_cell_h);
+
+        /* DIAGNOSTIC VERIFICATION PROBE TRAILER TRACKING RUNTIME TEXTURE ENGINES */
+        SDL_Log("[CatClock Stencil Diagnostic] Initialized Pupil Target Surface -> Width: %dpx, Height: %dpx, Active Scale Factor: %.4ff",
+                calculated_cell_w, calculated_cell_h, runtime_scale);
+
         ctx->texture_cache_stale = false;
     }
 
-    /* Isolated Bake Pass: Pre-bake each layout EXACTLY once safely outside blit loops */
-    HandShaderConfig hour_cfg   = { HAND_TYPE_HOUR, ctx->fg_color };
-    HandShaderConfig minute_cfg = { HAND_TYPE_MINUTE, ctx->fg_color };
-    HandShaderConfig second_cfg = { HAND_TYPE_SECOND, (SDL_Color){ 255, 0, 0, 255 } };
+    SDL_Color atlas_base_mask = { 255, 255, 255, 255 };
+    HandShaderConfig hour_cfg   = { HAND_TYPE_HOUR, atlas_base_mask };
+    HandShaderConfig minute_cfg = { HAND_TYPE_MINUTE, atlas_base_mask };
+    HandShaderConfig second_cfg = { HAND_TYPE_SECOND, atlas_base_mask };
 
     CatClock_RebakeComputeAtlas(renderer, &ctx->hands_atlas, 64, 96, TOTAL_PHASES, 6, CatClock_ShaderHands, &hour_cfg);
     CatClock_RebakeComputeAtlas(renderer, &ctx->minutes_atlas, 64, 96, TOTAL_PHASES, 6, CatClock_ShaderHands, &minute_cfg);
     CatClock_RebakeComputeAtlas(renderer, &ctx->seconds_atlas, 64, 96, TOTAL_PHASES, 6, CatClock_ShaderHands, &second_cfg);
     CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 24, 24, req_frames, 10, CatClock_ShaderEyes, NULL);
-    CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, req_frames, 8, CatClock_ShaderTail, &ctx->fg_color);
+    CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, 60, 8, (CatClock_ShaderCallback)CatClock_ShaderTail, &atlas_base_mask);
 
-    /* REUSE HALO TEXTURE OVER SENSE SLOT: Temporary allocation to store our outline atlas metrics */
     static CatClock_ComputeAtlas tail_halo_blueprint = {0};
-    CatClock_RebakeComputeAtlas(renderer, &tail_halo_blueprint, 96, 96, req_frames, 8, CatClock_ShaderTailHaloBake, NULL);
+    if (!actual_disable_outline) {
+        CatClock_RebakeComputeAtlas(renderer, &tail_halo_blueprint, 96, 96, 60, 8, CatClock_ShaderTailHaloBake, NULL);
+    }
 
     SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
     SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+
+    if (ctx->use_decorations) {
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    } else {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+    }
     SDL_RenderClear(renderer);
 
     SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
 
-    /* Pass 1 & 2: Outer Backdrops */
-    CatClock_RenderHaloOutline(ctx->xbm_lib, renderer, ctx->bg_color);
+    if (!actual_disable_outline) {
+        CatClock_RenderHaloOutline(ctx->xbm_lib, renderer, ctx->bg_color);
+    }
     CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->bg_color, 0.0f, 0.0f);
 
-    /* =========================================================================
-       Pass 3: Pre-Baked 16-bit Tail with Hardware 8-Way White Halo Silhouette Blit Mapping
-       ========================================================================= */
-    if (ctx->tail_atlas.texture && tail_halo_blueprint.texture) {
+    if (ctx->tail_atlas.texture) {
         float phase_ratio = (float)(SDL_GetTicks() % CYCLE_PERIOD_MS) / (float)CYCLE_PERIOD_MS;
-        int tail_idx = (int)(phase_ratio * (float)req_frames);
-        if (tail_idx >= req_frames) tail_idx = req_frames - 1;
+        int tail_idx = (int)(phase_ratio * (float)ctx->tail_atlas.total_frames);
+        if (tail_idx >= ctx->tail_atlas.total_frames) tail_idx = ctx->tail_atlas.total_frames - 1;
         if (tail_idx < 0) tail_idx = 0;
 
-        /* Re-verified centerline positioning metrics matching baseline grounds */
         SDL_FRect base_dst = { 27.0f, 200.0f, 96.0f, 96.0f };
 
-        /* Render Pass 3A: White Pre-Baked Outline Backdrop Layer */
-        SDL_SetTextureBlendMode(tail_halo_blueprint.texture, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureColorMod(tail_halo_blueprint.texture, 255, 255, 255);
-        SDL_SetTextureAlphaMod(tail_halo_blueprint.texture, 255);
-        SDL_RenderTexture(renderer, tail_halo_blueprint.texture, &tail_halo_blueprint.src_rects[tail_idx], &base_dst);
+        if (!actual_disable_outline && tail_halo_blueprint.texture) {
+            SDL_SetTextureBlendMode(tail_halo_blueprint.texture, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureColorMod(tail_halo_blueprint.texture, 255, 255, 255);
+            SDL_SetTextureAlphaMod(tail_halo_blueprint.texture, 255);
+            SDL_RenderTexture(renderer, tail_halo_blueprint.texture, &tail_halo_blueprint.src_rects[tail_idx], &base_dst);
+        }
 
-        /* Render Pass 3B: Foreground Inner Core Overlay Layer */
         SDL_SetTextureBlendMode(ctx->tail_atlas.texture, SDL_BLENDMODE_BLEND);
-        SDL_SetTextureColorMod(ctx->tail_atlas.texture, ctx->fg_color.r, ctx->fg_color.g, ctx->fg_color.b);
-        SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, ctx->fg_color.a);
+        /* FIXED: Restored complete syntax wrappers for tail color modulation pass */
+        SDL_SetTextureColorMod(ctx->tail_atlas.texture, ctx->cat_color.r, ctx->cat_color.g, ctx->cat_color.b);
+        SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, ctx->cat_color.a);
         SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx], &base_dst);
     }
 
-    /* Pass 4 & 5: Outer Linework Outlines and Neckties */
-    CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->fg_color, 0.0f, 0.0f);
+    CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color, 0.0f, 0.0f);
     CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->bg_color);
 
-    /* Pass 6 & 7: Eye socket base structure and moving pupil blits */
-    CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", ctx->bg_color, 0.0f, 0.0f);
-    if (ctx->eyes_atlas.texture) {
+    /* --- PHASE 1: HIGH-DPI SCALED 24x24 MASK PRESENTATION ENGINE --- */
+    if (ctx->eyes_atlas.texture && ctx->eye_clipping_stencil) {
         float phase_ratio = (float)(SDL_GetTicks() % CYCLE_PERIOD_MS) / (float)CYCLE_PERIOD_MS;
         int left_idx = (int)(phase_ratio * (float)req_frames);
         if (left_idx >= req_frames) left_idx = req_frames - 1;
@@ -235,35 +242,107 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer *renderer, CatClock_AppCon
         int right_idx = req_frames - 1 - left_idx;
         if (right_idx < 0) right_idx = 0;
 
-        SDL_FRect left_dst = { 48.0f, 30.0f, 24.0f, 24.0f };
-        SDL_FRect right_dst = { 80.0f, 30.0f, 24.0f, 24.0f };
+        SDL_BlendMode mask_blend = SDL_ComposeCustomBlendMode(
+            SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
+            SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD
+        );
 
-        SDL_SetTextureColorMod(ctx->eyes_atlas.texture, 0, 0, 0);
-        SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[left_idx], &left_dst);
-        SDL_RenderTextureRotated(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[right_idx], &right_dst, 0.0, NULL, SDL_FLIP_HORIZONTAL);
+        /* Clean unmultiplied screen targets aligned securely to layout boundaries */
+        SDL_FRect left_dst  = { 49.0f, 30.0f, 24.0f, 24.0f };
+        SDL_FRect right_dst = { 79.0f, 30.0f, 24.0f, 24.0f };
+
+        /* Local unscaled logical boundaries for both pupils inside our 24x24 target matrix */
+        SDL_FRect pupil_dst_local = { 0.0f, 0.0f, 24.0f, 24.0f };
+
+        // Save parent logical display viewport configuration cleanly
+        SDL_Rect viewport_save;
+        SDL_GetRenderViewport(renderer, &viewport_save);
+
+        /* Paint baseline eyes mask directly onto the main presentation layer first */
+        CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", ctx->bg_color, 0.0f, 0.0f);
+
+        // --- SUB-PHASE A: COMPOSITING SCREEN'S LEFT EYE SOCKET ---
+        SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+
+        /* GPU CROP LOCK: Set logical presentation size to 24x24 to truncate anything outside our local boundaries */
+        SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
+
+        /* Shift by exactly -49.0f to center the left socket hole inside our unscaled logical box */
+        CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", (SDL_Color){255,255,255,255}, -49.0f, -30.0f);
+
+        /* Intersect the left moving pupil atlas frame inside our cropped high-res boundaries */
+        SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, mask_blend);
+        SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[left_idx], &pupil_dst_local);
+
+        /* Blit left completed target back onto main canvas presentation layer */
+        SDL_SetRenderViewport(renderer, &viewport_save);
+        SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
+        SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(ctx->eye_clipping_stencil, ctx->pupil_color.r, ctx->pupil_color.g, ctx->pupil_color.b);
+        SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &left_dst);
+
+        // --- SUB-PHASE B: COMPOSITING SCREEN'S RIGHT EYE SOCKET ---
+        SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+
+        /* Re-enforce GPU crop lock constraints for the right eye cell pass */
+        SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
+
+        /* AVOID RE-GUESSING OFFSET: Instantiate a temporary scratch buffer to capture the exact left eye XBM chunk */
+        SDL_Texture *old_target = SDL_GetRenderTarget(renderer);
+        SDL_Texture *eyes_scratch_target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET, calculated_cell_w, calculated_cell_h);
+        SDL_SetRenderTarget(renderer, eyes_scratch_target);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+        SDL_RenderClear(renderer);
+        SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
+
+        /* Render the left eye socket plate data (-49.0f) exactly like Sub-Phase A */
+        CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", (SDL_Color){255,255,255,255}, -49.0f, -30.0f);
+
+        /* Switch context back to our main stencil compilation layer */
+        SDL_SetRenderTarget(renderer, old_target);
+        SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
+
+        /* FIXED COMPOSITION SYMMETRY: Blit the left mask chunk flipped horizontally into the stencil target.
+           This physically mirrors any off-by-one pixel structural shifts to match the opposing eye pass. */
+        SDL_RenderTextureRotated(renderer, eyes_scratch_target, NULL, &pupil_dst_local, 0.0, NULL, SDL_FLIP_HORIZONTAL);
+        SDL_DestroyTexture(eyes_scratch_target);
+
+        /* Intersect the right moving pupil atlas frame while applying horizontal flipping criteria to preserve 3D perspective */
+        SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, mask_blend);
+        SDL_RenderTextureRotated(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[right_idx], &pupil_dst_local, 0.0, NULL, SDL_FLIP_HORIZONTAL);
+
+        /* Blit right completed target back onto main canvas presentation layer */
+        SDL_SetRenderViewport(renderer, &viewport_save);
+        SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
+        SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureColorMod(ctx->eye_clipping_stencil, ctx->pupil_color.r, ctx->pupil_color.g, ctx->pupil_color.b);
+        SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &right_dst);
     }
-
-    /* Pass 8: Pure, Stateless Time Tracking Hands Overlay (Zero Inline Re-baking) */
+    /* --- PHASE 2: TIME HAND PRESENTATION CHANNELS --- */
     if (ctx->hands_atlas.texture && ctx->minutes_atlas.texture && ctx->seconds_atlas.texture) {
         int h_idx = hour_phase < 0 || hour_phase >= TOTAL_PHASES ? 0 : hour_phase;
         int m_idx = minute_phase < 0 || minute_phase >= TOTAL_PHASES ? 0 : minute_phase;
         int s_idx = second_phase < 0 || second_phase >= TOTAL_PHASES ? 0 : second_phase;
 
         SDL_FRect dst = { 74.0f - 32.0f, 150.0f - 48.0f, 64.0f, 96.0f };
-        SDL_SetTextureColorMod(ctx->hands_atlas.texture, 255, 255, 255);
-        SDL_SetTextureColorMod(ctx->minutes_atlas.texture, 255, 255, 255);
-        SDL_SetTextureColorMod(ctx->seconds_atlas.texture, 255, 255, 255);
 
-        /* Hour Blit Pass */
+        SDL_SetTextureColorMod(ctx->hands_atlas.texture, ctx->hour_color.r, ctx->hour_color.g, ctx->hour_color.b);
         SDL_RenderTexture(renderer, ctx->hands_atlas.texture, &ctx->hands_atlas.src_rects[h_idx], &dst);
 
-        /* Minute Blit Pass */
+        SDL_SetTextureColorMod(ctx->minutes_atlas.texture, ctx->minute_color.r, ctx->minute_color.g, ctx->minute_color.b);
         SDL_RenderTexture(renderer, ctx->minutes_atlas.texture, &ctx->minutes_atlas.src_rects[m_idx], &dst);
 
-        /* Dedicated Red Tracker Seconds Blit Pass */
-        SDL_RenderTexture(renderer, ctx->seconds_atlas.texture, &ctx->seconds_atlas.src_rects[s_idx], &dst);
+        if (!ctx->hide_seconds) {
+            SDL_SetTextureColorMod(ctx->seconds_atlas.texture, ctx->second_color.r, ctx->second_color.b, ctx->second_color.g);
+            SDL_RenderTexture(renderer, ctx->seconds_atlas.texture, &ctx->seconds_atlas.src_rects[s_idx], &dst);
+        }
     }
 
     SDL_SetRenderTarget(renderer, old_target);
 }
-

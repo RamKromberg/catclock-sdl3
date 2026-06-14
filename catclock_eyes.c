@@ -42,7 +42,12 @@ static void LocalDrawHardwarePupilOval(SDL_Renderer *renderer, float cx, float c
     SDL_free(indices);
 }
 
+#include "catclock_shared.h"
+#include <SDL3/SDL.h>
+#include <math.h>
+
 void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float scale, int frame_idx, void *userdata) {
+    if (!renderer) return;
     (void)userdata;
     int req_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
 
@@ -52,7 +57,12 @@ void CatClock_ShaderEyes(SDL_Renderer *renderer, int cell_w, int cell_h, float s
     float base_w = 2.5f * scale;
     float base_h = 10.5f * scale;
     float max_offset_x = 7.0f * scale;
-    SDL_Color pure_white = { 255, 255, 255, 255 };
 
-    LocalDrawHardwarePupilOval(renderer, (float)cell_w / 2.0f, (float)cell_h / 2.0f, base_w, base_h, sinf(swing_angle), max_offset_x, pure_white);
+    SDL_Color active_pupil_color = ctx.pupil_color;
+
+    /* RESTORED ORIGINAL BASICS: Pure whole integer midpoints to protect the 3D perspective math */
+    float true_center_x = (float)(int)(cell_w / 2);
+    float true_center_y = (float)(int)(cell_h / 2);
+
+    LocalDrawHardwarePupilOval(renderer, true_center_x, true_center_y, base_w, base_h, sinf(swing_angle), max_offset_x, active_pupil_color);
 }
