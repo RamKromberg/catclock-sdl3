@@ -160,6 +160,9 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h,
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase) {
+	// 1. CHRONOGRAPH ENTRY TIME CAPTURE
+	uint64_t pipeline_start_ticks = SDL_GetPerformanceCounter();
+
 	if (!ctx || !renderer)
 		return;
 	(void) sway_deg;
@@ -167,15 +170,12 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	int req_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
 	bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
 
-	/* Compute raw operational engine scale factor directly from current window boundaries */
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
 	float runtime_scale = (float) win_w / BASELINE_CANVAS_W;
 	if (runtime_scale <= 0.0f)
 		runtime_scale = 1.0f;
 
-	/* Calculate specialized high-DPI stencil dimensions matching the strict 24x24 cell bounds worth
-	 * of live data */
 	int calculated_cell_w = (int) ceilf(24.0f * runtime_scale);
 	int calculated_cell_h = (int) ceilf(24.0f * runtime_scale);
 	if (calculated_cell_w < 24)
@@ -202,7 +202,6 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
 								ctx->current_win_w, ctx->current_win_h);
 
-		/* ALLOCATING HIGH-RESOLUTION SCRATCHPAD SUB-SURFACE */
 		ctx->eye_clipping_stencil
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
 								calculated_cell_w, calculated_cell_h);
@@ -248,6 +247,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	if (!actual_disable_outline) {
 		CatClock_RenderHaloOutline(ctx->xbm_lib, renderer, ctx->bg_color);
 	}
+
 	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->detail_color, 0.0f,
 								  0.0f);
 
@@ -280,6 +280,11 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color, 0.0f, 0.0f);
 	CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->tie_color);
 
+	// ========================================================================
+	// START ISOLATED TRACKING OF THE EYES PROCESSING BLOCK
+	// ========================================================================
+	uint64_t eye_start_ticks = SDL_GetPerformanceCounter();
+
 	/* --- PHASE 1: HIGH-DPI SCALED 24x24 MASK PRESENTATION ENGINE --- */
 	if (ctx->eyes_atlas.texture && ctx->eye_clipping_stencil) {
 		float phase_ratio = (float) (SDL_GetTicks() % CYCLE_PERIOD_MS) / (float) CYCLE_PERIOD_MS;
@@ -292,89 +297,65 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		if (right_idx < 0)
 			right_idx = 0;
 
-		/* Clean unmultiplied screen targets aligned securely to layout boundaries */
 		SDL_FRect left_dst = { 49.0f, 30.0f, 24.0f, 24.0f };
 		SDL_FRect right_dst = { 79.0f, 30.0f, 24.0f, 24.0f };
-
-		/* Local unscaled logical boundaries for both pupils inside our 24x24 target matrix */
 		SDL_FRect pupil_dst_local = { 0.0f, 0.0f, 24.0f, 24.0f };
 
-		// Save parent logical display viewport configuration cleanly
 		SDL_Rect viewport_save;
 		SDL_GetRenderViewport(renderer, &viewport_save);
 
-		/* Paint baseline eyes mask directly onto the main presentation layer first using
-		 * detail_color instead of bg_color */
 		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", ctx->detail_color, 0.0f,
 									  0.0f);
 
-		// --- SUB-PHASE A: COMPOSITING SCREEN'S LEFT EYE SOCKET ---
+		// -- SUB-PHASE A: COMPOSITING SCREEN'S LEFT EYE SOCKET --
 		SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 		SDL_RenderClear(renderer);
 
-		/* GPU CROP LOCK: Set logical presentation size to 24x24 to truncate anything outside our
-		 * local boundaries */
 		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
-
-		/* Shift by exactly -49.0f to center the left socket hole inside our unscaled logical box */
 		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes",
 									  (SDL_Color) { 255, 255, 255, 255 }, -49.0f, -30.0f);
 
-		/*
-		 * FIX 1: USE MODULATION INTERSECTION
-		 * Changing this to SDL_BLENDMODE_MOD multiplies the multi-color cell from your shader
-		 * against the white XBM mask footprint. This crops your custom yellow background
-		 * perfectly within the eye sockets, leaving the nose bridge completely untouched!
-		 */
 		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_MOD);
 		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[left_idx],
 						  &pupil_dst_local);
 
-		/* Blitz left completed target back onto main canvas presentation layer */
 		SDL_SetRenderViewport(renderer, &viewport_save);
 		SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-		SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
-		SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
 
-		/* Bypass the restrictive single-color pupil blackouts */
+		SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
+
+		SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
 		SDL_SetTextureColorMod(ctx->eye_clipping_stencil, 255, 255, 255);
 		SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &left_dst);
 
-		// --- SUB-PHASE B: COMPOSITING SCREEN'S RIGHT EYE SOCKET ---
+		// -- SUB-PHASE B: COMPOSITING SCREEN'S RIGHT EYE SOCKET --
 		SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 		SDL_RenderClear(renderer);
 
-		/* Re-enforce GPU crop lock constraints for the right eye cell pass */
 		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
 
-		/* AVOID RE-GUESSING OFFSET: Instantiate a temporary scratch buffer to capture the exact
-		 * left eye XBM chunk */
 		SDL_Texture* old_target_sub = SDL_GetRenderTarget(renderer);
 		SDL_Texture* eyes_scratch_target
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
 								calculated_cell_w, calculated_cell_h);
+
 		SDL_SetRenderTarget(renderer, eyes_scratch_target);
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 		SDL_RenderClear(renderer);
-		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
 
-		/* Render the left eye socket plate data (-49.0f) exactly like Sub-Phase A */
+		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
 		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes",
 									  (SDL_Color) { 255, 255, 255, 255 }, -49.0f, -30.0f);
 
-		/* Switch context back to our main stencil compilation layer */
 		SDL_SetRenderTarget(renderer, old_target_sub);
 		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
 
-		/* FIXED COMPOSITION SYMMETRY: Blitz the left mask chunk flipped horizontally into the
-		 * stencil target. */
 		SDL_RenderTextureRotated(renderer, eyes_scratch_target, NULL, &pupil_dst_local, 0.0, NULL,
 								 SDL_FLIP_HORIZONTAL);
 		SDL_DestroyTexture(eyes_scratch_target);
 
-		/* FIX 2: Apply modulation intersection to the right eye cell pass as well */
 		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_MOD);
 		SDL_RenderTextureRotated(renderer, ctx->eyes_atlas.texture,
 								 &ctx->eyes_atlas.src_rects[right_idx], &pupil_dst_local, 0.0, NULL,
@@ -383,11 +364,19 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		/* Blitz right completed target back onto main canvas presentation layer */
 		SDL_SetRenderViewport(renderer, &viewport_save);
 		SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+
 		SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
+
 		SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
 		SDL_SetTextureColorMod(ctx->eye_clipping_stencil, 255, 255, 255);
 		SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &right_dst);
 	}
+
+	// ========================================================================
+	// END ISOLATED TRACKING OF THE EYES PROCESSING BLOCK
+	// ========================================================================
+	uint64_t eye_end_ticks = SDL_GetPerformanceCounter();
+
 	/* --- PHASE 2: TIME HAND PRESENTATION CHANNELS --- */
 	if (ctx->hands_atlas.texture && ctx->minutes_atlas.texture && ctx->seconds_atlas.texture) {
 		int h_idx = hour_phase < 0 || hour_phase >= TOTAL_PHASES ? 0 : hour_phase;
@@ -415,4 +404,19 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	}
 
 	SDL_SetRenderTarget(renderer, old_target);
+
+	// ========================================================================
+	// COMPUTE DELTAS AND PRINT UNCONDITIONED ONE-LINER REPORT
+	// ========================================================================
+	uint64_t pipeline_end_ticks = SDL_GetPerformanceCounter();
+	uint64_t frequency = SDL_GetPerformanceFrequency();
+
+	double total_pipeline_ms
+		= ((double) (pipeline_end_ticks - pipeline_start_ticks) * 1000.0) / (double) frequency;
+	double isolated_eyes_ms
+		= ((double) (eye_end_ticks - eye_start_ticks) * 1000.0) / (double) frequency;
+
+	printf("[PROFILE CHRONO] Total Pipeline: %.4f ms | Isolated Eyes: %.4f ms\n", total_pipeline_ms,
+		   isolated_eyes_ms);
+	fflush(stdout);
 }
