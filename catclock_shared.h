@@ -99,13 +99,13 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 										 int second_phase);
 
 CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer);
-void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib);
 void CatClock_RenderXbmLayer(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, const char* layer_id,
 							 SDL_Color color);
 void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* renderer,
 								   const char* layer_id, SDL_Color color, float offset_x,
 								   float offset_y);
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color);
+void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib);
 
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,

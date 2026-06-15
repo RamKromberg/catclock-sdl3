@@ -3,7 +3,8 @@ CFLAGS = -Wall -Wextra -O2 $(shell pkg-config --cflags sdl3)
 LIBS = $(shell pkg-config --libs sdl3) -lm
 
 TARGET = catclock-sdl3
-SRCS = catclock_main.c catclock_args.c catclock_xbm.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
+SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
+HEADERS = catclock_atlas.h catclock_shared.h catclock_xbm.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 
@@ -32,16 +33,16 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $(TARGET) $(LIBS)
 
-%.o: %.c catclock_shared.h catclock_atlas.h
+%.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Pattern rule for cross-compilation objects
-%.win.o: %.c catclock_shared.h catclock_atlas.h
+%.win.o: %.c $(HEADERS)
 	$(WIN_CC) $(WIN_CFLAGS) -c $< -o $@
 
 # Deterministic source formatting utility target
 format:
-	clang-format -i $(SRCS) catclock_shared.h catclock_atlas.h
+	clang-format -i $(SRCS) $(HEADERS)
 
 # Prevent GNU Make from deleting resource.rc and your specific icon asset as intermediates
 .SECONDARY: resource.rc catclock_icon.ico
