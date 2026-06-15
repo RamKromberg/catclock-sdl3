@@ -168,6 +168,7 @@ int main(int argc, char* argv[]) {
 			* (2.0f * (float) M_PI);
 		float sway_deg = sinf(angle) * 8.0f;
 
+		ctx.current_frame_step++;
 		CatClock_SynchronizePipelineAtlases(renderer, &ctx, sway_deg, hour_phase, minute_phase,
 											second_phase);
 

@@ -61,7 +61,7 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 	InitAssetNode(renderer, &lib->catoutline, "./assets/catwhite.xbm", "catwhite", color_base,
 				  false);
 	InitAssetNode(renderer, &lib->necktie, "./assets/cattie.xbm", "cattie", ctx.tie_color, false);
-	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, true);
+	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, false);
 
 	return lib;
 }
@@ -143,4 +143,18 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 	if (lib->eyesocket.texture)
 		SDL_DestroyTexture(lib->eyesocket.texture);
 	SDL_free(lib);
+}
+
+SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id) {
+	if (!lib || !layer_id)
+		return NULL;
+	if (strcmp(layer_id, "catback") == 0)
+		return lib->catbackground.texture;
+	if (strcmp(layer_id, "catwhite") == 0)
+		return lib->catoutline.texture;
+	if (strcmp(layer_id, "cattie") == 0)
+		return lib->necktie.texture;
+	if (strcmp(layer_id, "eyes") == 0)
+		return lib->eyesocket.texture;
+	return NULL;
 }

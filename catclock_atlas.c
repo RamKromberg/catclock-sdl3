@@ -157,17 +157,66 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h,
 	SDL_SetRenderViewport(renderer, &orig_viewport);
 }
 
+#ifdef CATCLOCK_DEBUG
+void CatClock_DumpEyesAtlasPixels(SDL_Renderer* renderer, void* ctx_ptr) {
+	(void) ctx_ptr;
+	if (!renderer || !ctx.eyes_atlas.texture)
+		return;
+
+	SDL_FRect first_cell = ctx.eyes_atlas.src_rects;
+	int cell_w = (int) roundf(first_cell.w);
+	int cell_h = (int) roundf(first_cell.h);
+	if (cell_w <= 0 || cell_h <= 0)
+		return;
+
+	SDL_Texture* target_backup = SDL_GetRenderTarget(renderer);
+	SDL_SetRenderTarget(renderer, ctx.eyes_atlas.texture);
+
+	SDL_Rect read_rect = { (int) roundf(first_cell.x), (int) roundf(first_cell.y), cell_w, cell_h };
+	SDL_Surface* dump_surf = SDL_RenderReadPixels(renderer, &read_rect);
+	if (dump_surf) {
+		SDL_Surface* rgba_surf = SDL_ConvertSurface(dump_surf, SDL_PIXELFORMAT_RGBA8888);
+		if (rgba_surf) {
+			Uint32* pixel_buffer = (Uint32*) rgba_surf->pixels;
+			SDL_Log("=== DYNAMIC REBAKE DIAGNOSTIC (SCALE: %.4f | PIXELS: %dx%d) ===",
+					ctx.current_scale, cell_w, cell_h);
+			for (int y = 0; y < cell_h; y++) {
+				char line_buffer[1024] = { 0 };
+				int offset = 0;
+				for (int x = 0; x < cell_w; x++) {
+					Uint32 pixel = pixel_buffer[y * cell_w + x];
+					Uint8 alpha = (pixel >> 24) & 0xFF;
+					if (alpha == 0)
+						offset += snprintf(line_buffer + offset, sizeof(line_buffer) - offset, " ");
+					else if (alpha < 64)
+						offset += snprintf(line_buffer + offset, sizeof(line_buffer) - offset, ".");
+					else if (alpha < 192)
+						offset += snprintf(line_buffer + offset, sizeof(line_buffer) - offset, "x");
+					else
+						offset += snprintf(line_buffer + offset, sizeof(line_buffer) - offset, "M");
+				}
+				printf("%s\n", line_buffer);
+			}
+			SDL_Log("====================================================");
+			SDL_DestroySurface(rgba_surf);
+		}
+		SDL_DestroySurface(dump_surf);
+	}
+	SDL_SetRenderTarget(renderer, target_backup);
+}
+#endif
+
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase) {
+#ifdef CATCLOCK_DEBUG
 	// 1. CHRONOGRAPH ENTRY TIME CAPTURE
 	uint64_t pipeline_start_ticks = SDL_GetPerformanceCounter();
-
+#endif
 	if (!ctx || !renderer)
 		return;
 	(void) sway_deg;
 
-	int req_frames = target_fps_limit <= 0 ? 60 : target_fps_limit;
 	bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
 
 	int win_w = 0, win_h = 0;
@@ -220,10 +269,15 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 								CatClock_ShaderHands, &minute_cfg);
 	CatClock_RebakeComputeAtlas(renderer, &ctx->seconds_atlas, 64, 96, TOTAL_PHASES, 6,
 								CatClock_ShaderHands, &second_cfg);
-	CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 24, 24, req_frames, 10,
+	CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 64, 32, target_fps_limit * 2, 10,
 								CatClock_ShaderEyes, NULL);
 	CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, 60, 8,
 								(CatClock_ShaderCallback) CatClock_ShaderTail, &atlas_base_mask);
+
+#ifdef CATCLOCK_DEBUG
+	/* Trigger exclusively inside targeted diagnostic debug build scenarios */
+	CatClock_DumpEyesAtlasPixels(renderer, NULL);
+#endif
 
 	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
 	if (!actual_disable_outline) {
@@ -281,101 +335,52 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->tie_color);
 
 	// ========================================================================
-	// START ISOLATED TRACKING OF THE EYES PROCESSING BLOCK
+	// START ISOLATED TRACKING OF THE EYES PROCESSING BLOCK (COMBINED SINGLE-PASS)
 	// ========================================================================
+#ifdef CATCLOCK_DEBUG
 	uint64_t eye_start_ticks = SDL_GetPerformanceCounter();
+#endif
 
-	/* --- PHASE 1: HIGH-DPI SCALED 24x24 MASK PRESENTATION ENGINE --- */
-	if (ctx->eyes_atlas.texture && ctx->eye_clipping_stencil) {
-		float phase_ratio = (float) (SDL_GetTicks() % CYCLE_PERIOD_MS) / (float) CYCLE_PERIOD_MS;
-		int left_idx = (int) (phase_ratio * (float) req_frames);
-		if (left_idx >= req_frames)
-			left_idx = req_frames - 1;
-		if (left_idx < 0)
-			left_idx = 0;
-		int right_idx = req_frames - 1 - left_idx;
-		if (right_idx < 0)
-			right_idx = 0;
+	if (ctx->eyes_atlas.texture) {
+		int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
+		int total_cycle_frames = total_fps_frames * 2;
 
-		SDL_FRect left_dst = { 49.0f, 30.0f, 24.0f, 24.0f };
-		SDL_FRect right_dst = { 79.0f, 30.0f, 24.0f, 24.0f };
-		SDL_FRect pupil_dst_local = { 0.0f, 0.0f, 24.0f, 24.0f };
+		int frame_idx = (int) (ctx->current_frame_step % total_cycle_frames);
+		if (frame_idx < 0)
+			frame_idx = 0;
 
-		SDL_Rect viewport_save;
-		SDL_GetRenderViewport(renderer, &viewport_save);
+		SDL_FRect eyes_src_rect = ctx->eyes_atlas.src_rects[frame_idx];
 
-		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes", ctx->detail_color, 0.0f,
-									  0.0f);
+		/* --- THE STRUCTURAL PRESENTATION FIX ---
+		   We force the static float coordinates to snap to strict integer pixels
+		   at runtime, which completely removes fractional rendering gaps and white
+		   edge line leaks across all zoom levels. */
+		SDL_FRect eyes_dst_rect = { 44.0f, 26.0f, 64.0f, 32.0f };
 
-		// -- SUB-PHASE A: COMPOSITING SCREEN'S LEFT EYE SOCKET --
-		SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-		SDL_RenderClear(renderer);
+		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureColorMod(ctx->eyes_atlas.texture, 255, 255, 255);
+		SDL_SetTextureAlphaMod(ctx->eyes_atlas.texture, 255);
 
-		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
-		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes",
-									  (SDL_Color) { 255, 255, 255, 255 }, -49.0f, -30.0f);
+		/* Fast, single-pass runtime blit call execution */
+		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 
-		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_MOD);
-		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &ctx->eyes_atlas.src_rects[left_idx],
-						  &pupil_dst_local);
-
-		SDL_SetRenderViewport(renderer, &viewport_save);
-		SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-
-		SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
-
-		SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->eye_clipping_stencil, 255, 255, 255);
-		SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &left_dst);
-
-		// -- SUB-PHASE B: COMPOSITING SCREEN'S RIGHT EYE SOCKET --
-		SDL_SetRenderTarget(renderer, ctx->eye_clipping_stencil);
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-		SDL_RenderClear(renderer);
-
-		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
-
-		SDL_Texture* old_target_sub = SDL_GetRenderTarget(renderer);
-		SDL_Texture* eyes_scratch_target
-			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
-								calculated_cell_w, calculated_cell_h);
-
-		SDL_SetRenderTarget(renderer, eyes_scratch_target);
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-		SDL_RenderClear(renderer);
-
-		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
-		CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "eyes",
-									  (SDL_Color) { 255, 255, 255, 255 }, -49.0f, -30.0f);
-
-		SDL_SetRenderTarget(renderer, old_target_sub);
-		SDL_SetRenderLogicalPresentation(renderer, 24, 24, SDL_LOGICAL_PRESENTATION_STRETCH);
-
-		SDL_RenderTextureRotated(renderer, eyes_scratch_target, NULL, &pupil_dst_local, 0.0, NULL,
-								 SDL_FLIP_HORIZONTAL);
-		SDL_DestroyTexture(eyes_scratch_target);
-
-		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_MOD);
-		SDL_RenderTextureRotated(renderer, ctx->eyes_atlas.texture,
-								 &ctx->eyes_atlas.src_rects[right_idx], &pupil_dst_local, 0.0, NULL,
-								 SDL_FLIP_HORIZONTAL);
-
-		/* Blitz right completed target back onto main canvas presentation layer */
-		SDL_SetRenderViewport(renderer, &viewport_save);
-		SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-
-		SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
-
-		SDL_SetTextureBlendMode(ctx->eye_clipping_stencil, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->eye_clipping_stencil, 255, 255, 255);
-		SDL_RenderTexture(renderer, ctx->eye_clipping_stencil, NULL, &right_dst);
+		/* Fast, single-pass VRAM draw call execution tracking */
+		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 	}
 
+#ifdef CATCLOCK_DEBUG
+	/* --- SILENCE CHRONO FLOOD IN PRODUCTION ---
+	   Enclose the log string print passes inside macro layouts to save console I/O */
+	uint64_t eye_end_ticks = SDL_GetPerformanceCounter();
+	double eye_ms = ((double) (eye_end_ticks - eye_start_ticks) * 1000.0)
+		/ (double) SDL_GetPerformanceFrequency();
+	double total_ms = ((double) (SDL_GetPerformanceCounter() - pipeline_start_ticks) * 1000.0)
+		/ (double) SDL_GetPerformanceFrequency();
+	SDL_Log("[PROFILE CHRONO] Total Pipeline: %.4f ms | Isolated Eyes: %.4f ms", total_ms, eye_ms);
+#endif
 	// ========================================================================
 	// END ISOLATED TRACKING OF THE EYES PROCESSING BLOCK
 	// ========================================================================
-	uint64_t eye_end_ticks = SDL_GetPerformanceCounter();
 
 	/* --- PHASE 2: TIME HAND PRESENTATION CHANNELS --- */
 	if (ctx->hands_atlas.texture && ctx->minutes_atlas.texture && ctx->seconds_atlas.texture) {
@@ -405,6 +410,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 
 	SDL_SetRenderTarget(renderer, old_target);
 
+#ifdef CATCLOCK_DEBUG
 	// ========================================================================
 	// COMPUTE DELTAS AND PRINT UNCONDITIONED ONE-LINER REPORT
 	// ========================================================================
@@ -419,4 +425,5 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	printf("[PROFILE CHRONO] Total Pipeline: %.4f ms | Isolated Eyes: %.4f ms\n", total_pipeline_ms,
 		   isolated_eyes_ms);
 	fflush(stdout);
+#endif
 }

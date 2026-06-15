@@ -49,6 +49,7 @@ typedef struct {
 	int current_win_h;
 	int current_ssaa_factor;
 	float current_scale;
+	uint64_t current_frame_step;
 	bool is_window_minimized;
 	bool texture_cache_stale;
 	SDL_Color fg_color;
@@ -106,6 +107,7 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 								   float offset_y);
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color);
 void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib);
+SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id);
 
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
