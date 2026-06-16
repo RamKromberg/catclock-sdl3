@@ -63,4 +63,13 @@ void PrintHelpDocumentation(const char* program_name);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);
 void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx);
 
+void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
+						  int frame_idx, void* userdata);
+void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
+						 void* userdata);
+void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
+						 void* userdata);
+void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
+								 int frame_idx, void* userdata);
+
 #endif /* CATCLOCK_ATLAS_H */

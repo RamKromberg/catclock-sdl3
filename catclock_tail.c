@@ -18,111 +18,138 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define STEM_VERTICES 4
-#define RING_SEGMENTS 24
-#define RING_VERTICES (RING_SEGMENTS * 2)
-#define CAP_SEGMENTS 16
-#define CAP_VERTICES (CAP_SEGMENTS + 1)
-
-#define TOTAL_VERTICES (STEM_VERTICES + RING_VERTICES + CAP_VERTICES)
-#define TOTAL_TRIANGLES (2 + (RING_SEGMENTS - 1) * 2 + (CAP_SEGMENTS - 1))
+#define RING_SEGMENTS 36
+#define CAP_SEGMENTS 17
 
 void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
 						 void* userdata) {
 	(void) cell_h;
 	(void) scale;
+	CatClock_TailShaderArgs* args = (CatClock_TailShaderArgs*) userdata;
 
-	SDL_Color* fg_color = (SDL_Color*) userdata;
-	SDL_Color color = fg_color ? *fg_color : (SDL_Color) { 0, 0, 0, 255 };
+	// Use hard layout offsets passed from the atlas loop for the halo presentation
+	float shift_x = args ? args->offset_x : 0.0f;
+	float shift_y = args ? args->offset_y : 0.0f;
 
-	/* ========================================================================
-	   TUNING BAY: MANUAL OSCILLATION GOVERNORS
-	   ======================================================================== */
-	/* 1. Total number of animation slices pre-baked into the target atlas texture. */
-	float TOTAL_CYCLE_FRAMES = 60.0f;
+	bool is_halo = args && args->force_halo_color;
+	SDL_FColor draw_color;
 
-	/* 2. The maximum negative deflection angle (reaching toward screen's left / cat's right). */
-	float MAX_LEFT_ANGLE_DEG = -19.5f;
+	if (is_halo) {
+		/* Keep white halo outline pixels uniform */
+		draw_color = (SDL_FColor) { 1.0f, 1.0f, 1.0f, 1.0f };
+	} else if (args && args->app_ctx) {
+		/* Map the user's custom command-line cat theme colors dynamically */
+		draw_color = (SDL_FColor) { args->app_ctx->cat_color.r / 255.0f,
+									args->app_ctx->cat_color.g / 255.0f,
+									args->app_ctx->cat_color.b / 255.0f,
+									args->app_ctx->cat_color.a / 255.0f };
+	} else {
+		/* Standard legacy default fallback to black */
+		draw_color = (SDL_FColor) { 0.0f, 0.0f, 0.0f, 1.0f };
+	}
+	SDL_FPoint zero_uv = { 0.0f, 0.0f };
 
-	/* 3. The maximum positive deflection angle (reaching toward screen's right / cat's left). */
-	float MAX_RIGHT_ANGLE_DEG = 30.0f;
+	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
+	float total_cycle_frames = (float) (total_fps_frames * 2);
 
-	/* ========================================================================
-	   TRIGONOMETRIC TRANSLATION PHASE
-	   ======================================================================== */
-	/* Map frame index cleanly over a normalized 0.0 to 1.0 cycle ratio */
-	float progress = (float) frame_idx / TOTAL_CYCLE_FRAMES;
-
-	/* Convert phase ratio to standard sinusoidal oscillator [-1.0, 1.0] */
+	float progress = (float) frame_idx / total_cycle_frames;
 	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
-
-	/* Map the symmetric wave into your distinct manual angle limits */
-	/* Shift wave from [-1, 1] to [0, 1] range */
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
 
-	/* Linearly interpolate directly between your governed left and right angle targets */
+	float MAX_LEFT_ANGLE_DEG = -18.0f;
+	float MAX_RIGHT_ANGLE_DEG = 28.5f;
 	float final_angle_deg
 		= MAX_LEFT_ANGLE_DEG + (normalized_wave * (MAX_RIGHT_ANGLE_DEG - MAX_LEFT_ANGLE_DEG));
 
-	/* Convert the evaluated angle to radians for the 2D transformation matrix */
 	float rad = (final_angle_deg * (float) M_PI) / 180.0f;
 	float cos_a = cosf(rad);
 	float sin_a = sinf(rad);
 
-	/* ========================================================================
-	   GEOMETRY RENDERING BLOCK (STABLE)
-	   ======================================================================== */
+	// Unified base tracking metrics tied directly to asset ratios
 	float internal_unit_ratio = (float) cell_w / 96.0f;
 
-	/* Pivot point anchors perfectly on the true mathematical center of our verified 96x96 grid */
-	/* ADJUSTMENT: Applied -1.0px leftward bias to center the origin and prevent right-swing
-	 * scissoring! */
-	float pivot_x = ((float) cell_w / 2.0f) - (1.0f * internal_unit_ratio);
-	float pivot_y = 12.0f * internal_unit_ratio;
+	// Symmetrically aligned pivot matching the core clock body depth perfectly
+	float pivot_x = ((float) cell_w / 2.0f) - (1.0f * internal_unit_ratio) + shift_x;
+	float pivot_y = (12.0f * internal_unit_ratio) + shift_y;
 
-	/* Proportional thickness metrics matching the approved visual look */
-	float half_width = 6.5f * internal_unit_ratio;
+	// FIX: Inject horizontal padding only to keep the X-axis flanks clean at 1x scale
+	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;
+
+	// Apply padding exclusively to widths; keep curves and radii pristine to prevent bloat
+	float half_width = (6.5f * internal_unit_ratio) + horizontal_cushion;
+	float outer_radius = 16.5f * internal_unit_ratio;
+	float inner_radius = 3.5f * internal_unit_ratio;
+
 	float stem_start_y = -8.5f * internal_unit_ratio;
 	float stem_end_y = 62.0f * internal_unit_ratio;
+	float capsule_length_stretch = 6.5f * internal_unit_ratio;
 
-	float outer_radius = 17.0f * internal_unit_ratio;
-	float inner_radius = 4.5f * internal_unit_ratio;
-	float loop_center_x = 11.0f * internal_unit_ratio;
+	// Adjust the horizontal center calculation to match the padded width parameters
+	float loop_center_x = (outer_radius + horizontal_cushion) - half_width;
 	float loop_center_y = stem_end_y;
 
-	SDL_Vertex* vertices = (SDL_Vertex*) SDL_malloc(sizeof(SDL_Vertex) * TOTAL_VERTICES);
-	if (!vertices)
-		return;
+	float cap_center_x = loop_center_x + ((outer_radius + inner_radius) / 2.0f);
+	float cap_center_y = loop_center_y - capsule_length_stretch;
+	float cap_radius = (outer_radius - inner_radius) / 2.0f;
 
-	SDL_FColor fcol = { color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f };
-	for (int i = 0; i < TOTAL_VERTICES; i++) {
-		vertices[i].color = fcol;
-		vertices[i].tex_coord.x = 0.0f;
-		vertices[i].tex_coord.y = 0.0f;
+	int max_v = 150;
+	int max_i = max_v * 6;
+	SDL_Vertex* vertices = (SDL_Vertex*) SDL_malloc(sizeof(SDL_Vertex) * max_v);
+	int* indices = (int*) SDL_malloc(sizeof(int) * max_i);
+
+	if (!vertices || !indices) {
+		if (vertices)
+			SDL_free(vertices);
+		if (indices)
+			SDL_free(indices);
+		return;
 	}
 
-	int v_ptr = 0;
+	int v_idx = 0;
+	int i_idx = 0;
 
-	/* COMPONENT A: The Straight Vertical Stem */
-	float s0_x = -half_width, s0_y = stem_start_y;
-	float s1_x = half_width, s1_y = stem_start_y;
-	float s2_x = loop_center_x - outer_radius, s2_y = stem_end_y;
-	float s3_x = loop_center_x - inner_radius, s3_y = stem_end_y;
+#define PUSH_VTX(lx, ly)                                                                           \
+	do {                                                                                           \
+		if (v_idx < max_v) {                                                                       \
+			vertices[v_idx].position = (SDL_FPoint) { pivot_x + ((lx) * cos_a - (ly) * sin_a),     \
+													  pivot_y + ((lx) * sin_a + (ly) * cos_a) };   \
+			vertices[v_idx].color = draw_color;                                                    \
+			vertices[v_idx].tex_coord = zero_uv;                                                   \
+			v_idx++;                                                                               \
+		}                                                                                          \
+	} while (0)
 
-	vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (s0_x * cos_a - s0_y * sin_a),
-												pivot_y + (s0_x * sin_a + s0_y * cos_a) };
-	vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (s1_x * cos_a - s1_y * sin_a),
-												pivot_y + (s1_x * sin_a + s1_y * cos_a) };
-	vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (s2_x * cos_a - s2_y * sin_a),
-												pivot_y + (s2_x * sin_a + s2_y * cos_a) };
-	vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (s3_x * cos_a - s3_y * sin_a),
-												pivot_y + (s3_x * sin_a + s3_y * cos_a) };
+#define PUSH_TRI(v0, v1, v2)                                                                       \
+	do {                                                                                           \
+		if (i_idx + 3 <= max_i) {                                                                  \
+			indices[i_idx++] = (v0);                                                               \
+			indices[i_idx++] = (v1);                                                               \
+			indices[i_idx++] = (v2);                                                               \
+		}                                                                                          \
+	} while (0)
 
-	/* COMPONENT B: 180-Degree Ring Sector Loop */
-	int ring_start_v = v_ptr;
+#define PUSH_QUAD(v0, v1, v2, v3)                                                                  \
+	do {                                                                                           \
+		PUSH_TRI(v0, v1, v2);                                                                      \
+		PUSH_TRI(v1, v3, v2);                                                                      \
+	} while (0)
+
+	// PART 1: STEM BODY
+	int s0 = v_idx;
+	PUSH_VTX(-half_width, stem_start_y);
+	int s1 = v_idx;
+	PUSH_VTX(half_width, stem_start_y);
+	int s2 = v_idx;
+	PUSH_VTX(-half_width, stem_end_y);
+	int s3 = v_idx;
+	PUSH_VTX(half_width, stem_end_y);
+	PUSH_QUAD(s0, s1, s2, s3);
+
+	// PART 2: THE CURVED BOTTOM RING HOOK
+	int ring_v_start = v_idx;
 	for (int i = 0; i < RING_SEGMENTS; i++) {
-		float t_seg = (float) i / (float) (RING_SEGMENTS - 1);
-		float sweep_rad = (float) M_PI - (t_seg * (float) M_PI);
+		float t = (float) i / (float) (RING_SEGMENTS - 1);
+		float sweep_rad = (float) M_PI - (t * (float) M_PI);
 		float cos_s = cosf(sweep_rad);
 		float sin_s = sinf(sweep_rad);
 
@@ -131,70 +158,59 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 		float ix = loop_center_x + inner_radius * cos_s;
 		float iy = loop_center_y + inner_radius * sin_s;
 
-		vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (ox * cos_a - oy * sin_a),
-													pivot_y + (ox * sin_a + oy * cos_a) };
-		vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (ix * cos_a - iy * sin_a),
-													pivot_y + (ix * sin_a + iy * cos_a) };
+		if (i == 0 || i == RING_SEGMENTS - 1) {
+			oy = stem_end_y;
+			iy = stem_end_y;
+		}
+
+		PUSH_VTX(ox, oy);
+		PUSH_VTX(ix, iy);
 	}
 
-	/* COMPONENT C: Symmetrical Semi-Circular End Cap Fan */
-	int cap_start_v = v_ptr;
-	float cap_center_x = loop_center_x + ((outer_radius + inner_radius) / 2.0f);
-	float cap_center_y = loop_center_y;
+	for (int i = 0; i < RING_SEGMENTS - 1; i++) {
+		int r_o0 = ring_v_start + (i * 2);
+		int r_i0 = ring_v_start + (i * 2) + 1;
+		int r_o1 = ring_v_start + ((i + 1) * 2);
+		int r_i1 = ring_v_start + ((i + 1) * 2) + 1;
+		PUSH_QUAD(r_o0, r_i0, r_o1, r_i1);
+	}
 
-	vertices[v_ptr++].position
-		= (SDL_FPoint) { pivot_x + (cap_center_x * cos_a - cap_center_y * sin_a),
-						 pivot_y + (cap_center_x * sin_a + cap_center_y * cos_a) };
+	// PART 3: THE ELONGATED STRAIGHT EXTENSION
+	int eo0 = ring_v_start + (RING_SEGMENTS - 1) * 2;
+	int ei0 = ring_v_start + (RING_SEGMENTS - 1) * 2 + 1;
 
-	float cap_radius = (outer_radius - inner_radius) / 2.0f;
+	float ex1 = loop_center_x + outer_radius;
+	float ey1 = loop_center_y - capsule_length_stretch;
+	float ex0 = loop_center_x + inner_radius;
+	float ey0 = loop_center_y - capsule_length_stretch;
+
+	int eo1 = v_idx;
+	PUSH_VTX(ex1, ey1);
+	int ei1 = v_idx;
+	PUSH_VTX(ex0, ey0);
+	PUSH_QUAD(eo0, ei0, eo1, ei1);
+
+	// PART 4: THE ROUNDED CAPSULE END-CAP TIP
+	int cap_center = v_idx;
+	PUSH_VTX(cap_center_x, cap_center_y);
+	int cap_arc_start = v_idx;
+
 	for (int i = 0; i < CAP_SEGMENTS; i++) {
-		float t_cap = (float) i / (float) (CAP_SEGMENTS - 1);
-		float cap_rad = -(float) M_PI + (t_cap * ((float) M_PI + 0.05f));
+		float t = (float) i / (float) (CAP_SEGMENTS - 1);
+		float cap_rad = t * (float) M_PI;
 		float cx = cap_center_x + cap_radius * cosf(cap_rad);
-		float cy = cap_center_y + cap_radius * sinf(cap_rad);
-
-		vertices[v_ptr++].position = (SDL_FPoint) { pivot_x + (cx * cos_a - cy * sin_a),
-													pivot_y + (cx * sin_a + cy * cos_a) };
+		float cy = cap_center_y - cap_radius * sinf(cap_rad);
+		PUSH_VTX(cx, cy);
 	}
 
-	/* Index Stitching Array Compilation */
-	int* indices = (int*) SDL_malloc(sizeof(int) * TOTAL_TRIANGLES * 3);
-	if (indices) {
-		int idx = 0;
-
-		/* Triangle Strip A: Vertical Stem */
-		indices[idx++] = 0;
-		indices[idx++] = 1;
-		indices[idx++] = 2;
-		indices[idx++] = 1;
-		indices[idx++] = 3;
-		indices[idx++] = 2;
-
-		/* Triangle Strip B: 180-Degree Ring Sector Loop */
-		for (int i = 0; i < RING_SEGMENTS - 1; i++) {
-			int curr_o = ring_start_v + i * 2;
-			int curr_i = ring_start_v + i * 2 + 1;
-			int next_o = ring_start_v + (i + 1) * 2;
-			int next_i = ring_start_v + (i + 1) * 2 + 1;
-
-			indices[idx++] = curr_o;
-			indices[idx++] = curr_i;
-			indices[idx++] = next_o;
-			indices[idx++] = curr_i;
-			indices[idx++] = next_i;
-			indices[idx++] = next_o;
-		}
-
-		/* Triangle Fan C: Smooth Round Tip Cap */
-		for (int i = 0; i < CAP_SEGMENTS - 1; i++) {
-			indices[idx++] = cap_start_v;
-			indices[idx++] = cap_start_v + 1 + i;
-			indices[idx++] = cap_start_v + 2 + i;
-		}
-
-		SDL_RenderGeometry(renderer, NULL, vertices, TOTAL_VERTICES, indices, TOTAL_TRIANGLES * 3);
-		SDL_free(indices);
+	for (int i = 0; i < CAP_SEGMENTS - 1; i++) {
+		PUSH_TRI(cap_center, cap_arc_start + i, cap_arc_start + i + 1);
 	}
 
+	// Lock to standard solid rendering modes (emulates classic 1-bit bitmap styling)
+	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+	SDL_RenderGeometry(renderer, NULL, vertices, v_idx, indices, i_idx);
+
+	SDL_free(indices);
 	SDL_free(vertices);
 }
