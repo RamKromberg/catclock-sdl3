@@ -56,7 +56,6 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 
-	/* Hand off parsing to dedicated parsing channel component */
 	ParseCommandLineArguments(argc, argv, &ctx);
 
 	int target_w = (int) (BASELINE_CANVAS_W * ctx.current_scale);
@@ -158,27 +157,39 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
+		/* 1. Advance continuous animation indices at 30 FPS */
+		ctx.current_frame_step++;
+
+		/* 2. Map system local clock time straight into discrete phase integers */
 		time_t raw_time = time(NULL);
 		struct tm* time_info = localtime(&raw_time);
-		int hour_phase = ((time_info->tm_hour % 12) * 5) + (time_info->tm_min / 12);
-		int minute_phase = time_info->tm_min % 60;
-		int second_phase = time_info->tm_sec % 60;
 
-		float angle = (float) (SDL_GetTicks() % CYCLE_PERIOD_MS) / (float) CYCLE_PERIOD_MS
-			* (2.0f * (float) M_PI);
-		float sway_deg = sinf(angle) * 8.0f;
+		int hour_phase = 0;
+		int minute_phase = 0;
+		int second_phase = 0;
 
-		ctx.current_frame_step++;
-		CatClock_SynchronizePipelineAtlases(renderer, &ctx, sway_deg, hour_phase, minute_phase,
+		if (time_info) {
+			second_phase = time_info->tm_sec % 60;
+			minute_phase = time_info->tm_min % 60;
+			hour_phase = ((time_info->tm_hour % 12) * 5) + (time_info->tm_min / 12);
+		}
+
+		/* 3. Execute zero-overhead shuffling via pre-baked texture sheets */
+		CatClock_SynchronizePipelineAtlases(renderer, &ctx, 0.0f, hour_phase, minute_phase,
 											second_phase);
 
+		/* 4. Display the composite backbuffer onto the screen target */
 		if (!ctx.is_window_minimized) {
 			SDL_SetRenderTarget(renderer, NULL);
 			SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+
 			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 			SDL_RenderClear(renderer);
 
 			if (ctx.master_composite_layer) {
+				/* Fix: Enforce alpha blending to stabilize system screenshot color channels */
+				SDL_SetTextureBlendMode(ctx.master_composite_layer, SDL_BLENDMODE_BLEND);
+
 				SDL_FRect display_rect
 					= { 0.0f, 0.0f, (float) ctx.current_win_w, (float) ctx.current_win_h };
 				SDL_RenderTexture(renderer, ctx.master_composite_layer, NULL, &display_rect);
@@ -186,17 +197,20 @@ int main(int argc, char* argv[]) {
 			SDL_RenderPresent(renderer);
 		}
 
+		/* Standard Frame Rate Throttling / Pacing Block */
 		Uint64 current_ticks = SDL_GetPerformanceCounter();
 		Uint64 elapsed_ticks = current_ticks - last_frame_ticks;
 		if (elapsed_ticks < frame_delay_ticks) {
 			Uint64 remaining_ticks = frame_delay_ticks - elapsed_ticks;
 			Uint64 sleep_ms = (remaining_ticks * 1000) / SDL_GetPerformanceFrequency();
-			if (sleep_ms > 0)
+			if (sleep_ms > 0) {
 				SDL_Delay((Uint32) sleep_ms);
+			}
 		}
 		last_frame_ticks = SDL_GetPerformanceCounter();
 	}
 
+	/* VRAM Cleanup passes */
 	CatClock_DestroyComputeAtlas(&ctx.hands_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.minutes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.seconds_atlas);
@@ -206,7 +220,6 @@ int main(int argc, char* argv[]) {
 	if (ctx.master_composite_layer)
 		SDL_DestroyTexture(ctx.master_composite_layer);
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
-
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
 	SDL_Quit();

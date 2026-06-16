@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Match the private layout from catclock_hands.c to guarantee memory alignment */
 typedef struct {
 	int hand_type;
 	SDL_Color color;
@@ -50,7 +51,6 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
 								 CatClock_ShaderCallback shader, void* userdata) {
-
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
 	float scale = (float) win_w / BASELINE_CANVAS_W;
@@ -66,7 +66,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	atlas->total_frames = total_frames;
 	atlas->last_scale = scale;
 
-	// Inject 2-Pixel Dynamic Padding Cushion to prevent sub-pixel edge truncation
 	atlas->cell_w = (int) ceilf((float) cell_base_w * scale) + 2;
 	atlas->cell_h = (int) ceilf((float) cell_base_h * scale) + 2;
 
@@ -98,8 +97,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 		int cell_x = (i % cols) * atlas->cell_w;
 		int cell_y = (i / cols) * atlas->cell_h;
 
-		// Offset texture layout source frame by 1-pixel padding to isolate sub-pixel textures
-		// cleanly
 		atlas->src_rects[i]
 			= (SDL_FRect) { (float) cell_x + 1.0f, (float) cell_y + 1.0f,
 							(float) atlas->cell_w - 2.0f, (float) atlas->cell_h - 2.0f };
@@ -111,8 +108,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 		SDL_FRect local_cell_rect = { 0.0f, 0.0f, (float) atlas->cell_w, (float) atlas->cell_h };
 		SDL_RenderFillRect(renderer, &local_cell_rect);
 
-		// Shift runtime viewport matrix offsets inward to preserve target pixel dimensions
-		// perfectly
 		SDL_Rect inner_render_viewport
 			= { cell_x + 1, cell_y + 1, atlas->cell_w - 2, atlas->cell_h - 2 };
 		SDL_SetRenderViewport(renderer, &inner_render_viewport);
@@ -139,10 +134,6 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->last_scale = -1.0f;
 }
 
-// =================================================================
-// ARCHITECTURAL CORRECTION: Safe Multi-Pass Halo Blueprint Bake
-// Feeds clean transformations down without modifying hardware viewports
-// =================================================================
 void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 								 int frame_idx, void* userdata) {
 	CatClock_TailShaderArgs* blueprint_args = (CatClock_TailShaderArgs*) userdata;
@@ -161,7 +152,13 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h,
 	}
 }
 
-#ifdef CATCLOCK_DEBUG_TAIL
+/*
+Dumps Frames.
+USE:
+CMD='make clean && make CFLAGS="-Wall -Wextra -O2 -DCATCLOCK_DEBUG" \
+&& ./catclock-sdl3'; clear && echo -e "\e[32m$\e[0m $CMD" && eval "$CMD"
+*/
+#ifdef CATCLOCK_DEBUG
 void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
 	if (!renderer || !atlas)
 		return;
@@ -193,7 +190,7 @@ void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAt
 			if (final_rgba) {
 				char filename_buffer[256];
 				snprintf(filename_buffer, sizeof(filename_buffer),
-						 "tail_flicker_scale%0.2f_frame_%d.png", active_runtime_scale,
+						 "catclock_scale%0.2f_frame_%d.png", active_runtime_scale,
 						 multi_frame_sequence_counter);
 
 				SDL_SavePNG(final_rgba, filename_buffer);
@@ -216,13 +213,12 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		return;
 
 	(void) sway_deg;
-
 	bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
 
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
 	float runtime_scale = (float) win_w / BASELINE_CANVAS_W;
-	if (runtime_scale <= 0.0f)
+	if (runtime_scale <= 0.01f)
 		runtime_scale = 1.0f;
 
 	int calculated_cell_w = (int) ceilf(24.0f * runtime_scale);
@@ -231,6 +227,8 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		calculated_cell_w = 24;
 	if (calculated_cell_h < 24)
 		calculated_cell_h = 24;
+
+	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
 
 	if (!ctx->master_composite_layer || ctx->texture_cache_stale || !ctx->eye_clipping_stencil) {
 		if (ctx->master_composite_layer) {
@@ -246,6 +244,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		CatClock_DestroyComputeAtlas(&ctx->seconds_atlas);
 		CatClock_DestroyComputeAtlas(&ctx->eyes_atlas);
 		CatClock_DestroyComputeAtlas(&ctx->tail_atlas);
+		CatClock_DestroyComputeAtlas(&tail_halo_blueprint);
 
 		ctx->master_composite_layer
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
@@ -253,39 +252,36 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		ctx->eye_clipping_stencil
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
 								calculated_cell_w, calculated_cell_h);
+
+		HandShaderConfig hour_cfg = { HAND_TYPE_HOUR, ctx->hour_color };
+		HandShaderConfig minute_cfg = { HAND_TYPE_MINUTE, ctx->minute_color };
+		HandShaderConfig second_cfg = { HAND_TYPE_SECOND, ctx->second_color };
+
+		int calculated_fps_limit = target_fps_limit <= 0 ? 30 : target_fps_limit;
+		int dynamic_cycle_frames = calculated_fps_limit * 2;
+
+		CatClock_RebakeComputeAtlas(renderer, &ctx->hands_atlas, 64, 96, TOTAL_PHASES, 6,
+									CatClock_ShaderHands, &hour_cfg);
+		CatClock_RebakeComputeAtlas(renderer, &ctx->minutes_atlas, 64, 96, TOTAL_PHASES, 6,
+									CatClock_ShaderHands, &minute_cfg);
+		CatClock_RebakeComputeAtlas(renderer, &ctx->seconds_atlas, 64, 96, TOTAL_PHASES, 6,
+									CatClock_ShaderHands, &second_cfg);
+		CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 64, 32, dynamic_cycle_frames, 10,
+									CatClock_ShaderEyes, NULL);
+
+		CatClock_TailShaderArgs main_tail_args = { ctx, 0.0f, 0.0f, false };
+		main_tail_args.app_ctx->cat_color = ctx->cat_color;
+		CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, dynamic_cycle_frames, 8,
+									CatClock_ShaderTail, &main_tail_args);
+
+		if (!actual_disable_outline) {
+			CatClock_TailShaderArgs halo_bake_args = { ctx, 0.0f, 0.0f, true };
+			CatClock_RebakeComputeAtlas(renderer, &tail_halo_blueprint, 96, 96,
+										dynamic_cycle_frames, 8, CatClock_ShaderTailHaloBake,
+										&halo_bake_args);
+		}
+
 		ctx->texture_cache_stale = false;
-	}
-
-	SDL_Color atlas_base_mask = { 255, 255, 255, 255 };
-	HandShaderConfig hour_cfg = { HAND_TYPE_HOUR, atlas_base_mask };
-	HandShaderConfig minute_cfg = { HAND_TYPE_MINUTE, atlas_base_mask };
-	HandShaderConfig second_cfg = { HAND_TYPE_SECOND, atlas_base_mask };
-
-	int calculated_fps_limit = target_fps_limit <= 0 ? 30 : target_fps_limit;
-	int dynamic_cycle_frames = calculated_fps_limit * 2;
-
-	CatClock_RebakeComputeAtlas(renderer, &ctx->hands_atlas, 64, 96, TOTAL_PHASES, 6,
-								CatClock_ShaderHands, &hour_cfg);
-	CatClock_RebakeComputeAtlas(renderer, &ctx->minutes_atlas, 64, 96, TOTAL_PHASES, 6,
-								CatClock_ShaderHands, &minute_cfg);
-	CatClock_RebakeComputeAtlas(renderer, &ctx->seconds_atlas, 64, 96, TOTAL_PHASES, 6,
-								CatClock_ShaderHands, &second_cfg);
-	CatClock_RebakeComputeAtlas(renderer, &ctx->eyes_atlas, 64, 32, dynamic_cycle_frames, 10,
-								CatClock_ShaderEyes, NULL);
-
-	// =================================================================
-	// SAFE PAYLOAD PACKING: regular master core tail bakes
-	// Enforces clean data isolation boundaries away from local stack pointer bugs
-	// =================================================================
-	CatClock_TailShaderArgs main_tail_args = { ctx, 0.0f, 0.0f, false };
-	CatClock_RebakeComputeAtlas(renderer, &ctx->tail_atlas, 96, 96, dynamic_cycle_frames, 8,
-								CatClock_ShaderTail, &main_tail_args);
-
-	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
-	if (!actual_disable_outline) {
-		CatClock_TailShaderArgs halo_bake_args = { ctx, 0.0f, 0.0f, true };
-		CatClock_RebakeComputeAtlas(renderer, &tail_halo_blueprint, 96, 96, dynamic_cycle_frames, 8,
-									CatClock_ShaderTailHaloBake, &halo_bake_args);
 	}
 
 	SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
@@ -308,6 +304,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->detail_color, 0.0f,
 								  0.0f);
 
+	/* 1. Pre-Baked Pendulum & Halo Blit Pass */
 	if (ctx->tail_atlas.texture) {
 		int total_tail_frames = ctx->tail_atlas.total_frames;
 		int tail_idx = (int) (ctx->current_frame_step % total_tail_frames);
@@ -327,9 +324,8 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		}
 
 		SDL_SetTextureBlendMode(ctx->tail_atlas.texture, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->tail_atlas.texture, ctx->cat_color.r, ctx->cat_color.g,
-							   ctx->cat_color.b);
-		SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, ctx->cat_color.a);
+		SDL_SetTextureColorMod(ctx->tail_atlas.texture, 255, 255, 255);
+		SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, 255);
 		SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx],
 						  &base_dst);
 	}
@@ -337,6 +333,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color, 0.0f, 0.0f);
 	CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->tie_color);
 
+	/* 2. Moving Eyes Blit Shuffling Pass */
 	if (ctx->eyes_atlas.texture) {
 		int total_eye_frames = ctx->eyes_atlas.total_frames;
 		int frame_idx = (int) (ctx->current_frame_step % total_eye_frames);
@@ -350,6 +347,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 	}
 
+	/* 3. Pre-Baked Clock Hands Blit Pass */
 	if (ctx->hands_atlas.texture && ctx->minutes_atlas.texture && ctx->seconds_atlas.texture) {
 		int h_idx = hour_phase < 0 || hour_phase >= TOTAL_PHASES ? 0 : hour_phase;
 		int m_idx = minute_phase < 0 || minute_phase >= TOTAL_PHASES ? 0 : minute_phase;
@@ -357,17 +355,21 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 
 		SDL_FRect dst = { 74.0f - 32.0f, 150.0f - 48.0f, 64.0f, 96.0f };
 
+		/* Tint the white mask layers correctly using your high-contrast options */
+		SDL_SetTextureBlendMode(ctx->hands_atlas.texture, SDL_BLENDMODE_BLEND);
 		SDL_SetTextureColorMod(ctx->hands_atlas.texture, ctx->hour_color.r, ctx->hour_color.g,
 							   ctx->hour_color.b);
 		SDL_RenderTexture(renderer, ctx->hands_atlas.texture, &ctx->hands_atlas.src_rects[h_idx],
 						  &dst);
 
+		SDL_SetTextureBlendMode(ctx->minutes_atlas.texture, SDL_BLENDMODE_BLEND);
 		SDL_SetTextureColorMod(ctx->minutes_atlas.texture, ctx->minute_color.r, ctx->minute_color.g,
 							   ctx->minute_color.b);
 		SDL_RenderTexture(renderer, ctx->minutes_atlas.texture,
 						  &ctx->minutes_atlas.src_rects[m_idx], &dst);
 
 		if (!ctx->hide_seconds) {
+			SDL_SetTextureBlendMode(ctx->seconds_atlas.texture, SDL_BLENDMODE_BLEND);
 			SDL_SetTextureColorMod(ctx->seconds_atlas.texture, ctx->second_color.r,
 								   ctx->second_color.g, ctx->second_color.b);
 			SDL_RenderTexture(renderer, ctx->seconds_atlas.texture,
@@ -375,11 +377,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		}
 	}
 
-#ifdef CATCLOCK_DEBUG_EYES
-	CatClock_DumpEyesAtlasPixels(renderer, ctx);
-#endif
-
-#ifdef CATCLOCK_DEBUG_TAIL
+#ifdef CATCLOCK_DEBUG
 	if (ctx->tail_atlas.texture) {
 		CatClock_DiagnosticDumpTailAtlas(renderer, &ctx->tail_atlas);
 	}
