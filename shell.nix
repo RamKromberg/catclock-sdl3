@@ -11,10 +11,11 @@ pkgs.mkShell {
     sdl3
     libfaketime
     imagemagick
-    osslsigncode
-    openssl # ./gen_cert.sh
     clang-tools # $ make format
-    #mupdf-headless # $ ./pack_source.sh ; mutool info ./catclock_repository_dump.pdf
+    bc # ./track.sh
+    openssl # ./gen_cert.sh
+    osslsigncode
+    #mupdf-headless # $ ./pack_source_mutool.sh ; mutool info ./catclock_repository_dump.pdf
   ];
 
   buildInputs = [
