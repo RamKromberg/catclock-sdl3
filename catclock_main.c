@@ -58,6 +58,11 @@ int main(int argc, char* argv[]) {
 
 	ParseCommandLineArguments(argc, argv, &ctx);
 
+#ifdef CATCLOCK_TELEMETRY
+	/* Collect and output running performance averages once every 5 seconds */
+	ctx.metrics.logging_frequency = (target_fps_limit <= 0 ? 30 : target_fps_limit) * 5;
+#endif
+
 	int target_w = (int) (BASELINE_CANVAS_W * ctx.current_scale);
 	int target_h = (int) (BASELINE_CANVAS_H * ctx.current_scale);
 
@@ -107,10 +112,14 @@ int main(int argc, char* argv[]) {
 
 	bool running = true;
 	SDL_Event event;
-	Uint64 frame_delay_ticks = SDL_GetPerformanceFrequency() / target_fps_limit;
-	Uint64 last_frame_ticks = SDL_GetPerformanceCounter();
+
+	/* High-precision monotonic frame pacing metrics initialization */
+	Uint32 target_fps = (target_fps_limit <= 0 ? 30 : target_fps_limit);
+	Uint64 frame_delay_ticks = SDL_GetPerformanceFrequency() / target_fps;
+	Uint64 next_frame_ticks = SDL_GetPerformanceCounter() + frame_delay_ticks;
 
 	while (running) {
+		/* Non-blocking event pump drains window messages immediately to prevent input lag */
 		while (SDL_PollEvent(&event)) {
 			if (event.type == SDL_EVENT_QUIT) {
 				running = false;
@@ -157,57 +166,63 @@ int main(int argc, char* argv[]) {
 			}
 		}
 
-		/* 1. Advance continuous animation indices at 30 FPS */
-		ctx.current_frame_step++;
-
-		/* 2. Map system local clock time straight into discrete phase integers */
-		time_t raw_time = time(NULL);
-		struct tm* time_info = localtime(&raw_time);
-
-		int hour_phase = 0;
-		int minute_phase = 0;
-		int second_phase = 0;
-
-		if (time_info) {
-			second_phase = time_info->tm_sec % 60;
-			minute_phase = time_info->tm_min % 60;
-			hour_phase = ((time_info->tm_hour % 12) * 5) + (time_info->tm_min / 12);
-		}
-
-		/* 3. Execute zero-overhead shuffling via pre-baked texture sheets */
-		CatClock_SynchronizePipelineAtlases(renderer, &ctx, 0.0f, hour_phase, minute_phase,
-											second_phase);
-
-		/* 4. Display the composite backbuffer onto the screen target */
-		if (!ctx.is_window_minimized) {
-			SDL_SetRenderTarget(renderer, NULL);
-			SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
-
-			SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-			SDL_RenderClear(renderer);
-
-			if (ctx.master_composite_layer) {
-				/* Fix: Enforce alpha blending to stabilize system screenshot color channels */
-				SDL_SetTextureBlendMode(ctx.master_composite_layer, SDL_BLENDMODE_BLEND);
-
-				SDL_FRect display_rect
-					= { 0.0f, 0.0f, (float) ctx.current_win_w, (float) ctx.current_win_h };
-				SDL_RenderTexture(renderer, ctx.master_composite_layer, NULL, &display_rect);
-			}
-			SDL_RenderPresent(renderer);
-		}
-
-		/* Standard Frame Rate Throttling / Pacing Block */
 		Uint64 current_ticks = SDL_GetPerformanceCounter();
-		Uint64 elapsed_ticks = current_ticks - last_frame_ticks;
-		if (elapsed_ticks < frame_delay_ticks) {
-			Uint64 remaining_ticks = frame_delay_ticks - elapsed_ticks;
-			Uint64 sleep_ms = (remaining_ticks * 1000) / SDL_GetPerformanceFrequency();
-			if (sleep_ms > 0) {
-				SDL_Delay((Uint32) sleep_ms);
+
+		/* Process clock calculations and rendering functions only when the frame deadline matches
+		 */
+		if (current_ticks >= next_frame_ticks) {
+			/* 1. Advance continuous asset animation state indices */
+			ctx.current_frame_step++;
+
+			/* 2. Map system wall clock time straight into discrete phase integers */
+			time_t raw_time = time(NULL);
+			struct tm* time_info = localtime(&raw_time);
+
+			int hour_phase = 0;
+			int minute_phase = 0;
+			int second_phase = 0;
+
+			if (time_info) {
+				second_phase = time_info->tm_sec % 60;
+				minute_phase = time_info->tm_min % 60;
+				hour_phase = ((time_info->tm_hour % 12) * 5) + (time_info->tm_min / 12);
+			}
+
+			/* 3. Flush asset draw calls directly to the master composite target texture */
+			CatClock_SynchronizePipelineAtlases(renderer, &ctx, 0.0f, hour_phase, minute_phase,
+												second_phase);
+
+			/* 4. Display the composite layer graphics onto the window backbuffer */
+			if (!ctx.is_window_minimized) {
+				SDL_SetRenderTarget(renderer, NULL);
+
+				SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
+				SDL_RenderClear(renderer);
+
+				if (ctx.master_composite_layer) {
+					SDL_SetTextureBlendMode(ctx.master_composite_layer, SDL_BLENDMODE_BLEND);
+
+					SDL_FRect display_rect
+						= { 0.0f, 0.0f, (float) ctx.current_win_w, (float) ctx.current_win_h };
+					SDL_RenderTexture(renderer, ctx.master_composite_layer, NULL, &display_rect);
+				}
+				SDL_RenderPresent(renderer);
+			}
+
+			/* Advance target timeline step cleanly */
+			next_frame_ticks += frame_delay_ticks;
+		}
+
+		/* Restored Original Backup Loop Pacing */
+		current_ticks = SDL_GetPerformanceCounter();
+
+		if (current_ticks < next_frame_ticks) {
+			Uint64 remaining_ticks = next_frame_ticks - current_ticks;
+			Uint64 sleep_ns = (remaining_ticks * 1000000000ULL) / SDL_GetPerformanceFrequency();
+			if (sleep_ns > 0) {
+				SDL_DelayNS(sleep_ns);
 			}
 		}
-		last_frame_ticks = SDL_GetPerformanceCounter();
 	}
 
 	/* VRAM Cleanup passes */
@@ -219,6 +234,7 @@ int main(int argc, char* argv[]) {
 
 	if (ctx.master_composite_layer)
 		SDL_DestroyTexture(ctx.master_composite_layer);
+
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);

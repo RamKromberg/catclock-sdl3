@@ -88,6 +88,18 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
 
+	/* Pre-bake dynamic colors straight into VRAM atlas textures during initialization */
+	if (atlas == &ctx.hands_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.hour_color.r, ctx.hour_color.g,
+							   ctx.hour_color.b);
+	} else if (atlas == &ctx.minutes_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.minute_color.r, ctx.minute_color.g,
+							   ctx.minute_color.b);
+	} else if (atlas == &ctx.seconds_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.second_color.r, ctx.second_color.g,
+							   ctx.second_color.b);
+	}
+
 	SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
 	SDL_SetRenderTarget(renderer, atlas->texture);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
@@ -206,6 +218,41 @@ void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAt
 }
 #endif
 
+#ifdef CATCLOCK_TELEMETRY
+void CatClock_TelemetryBegin(CatClock_TelemetryFence* fence) {
+	if (!fence)
+		return;
+	fence->start_ticks = SDL_GetPerformanceCounter();
+}
+
+void CatClock_TelemetryEnd(CatClock_TelemetryFence* fence, Uint32 report_interval,
+						   const char* token_identifier) {
+	if (!fence || fence->start_ticks == 0)
+		return;
+
+	Uint64 end_ticks = SDL_GetPerformanceCounter();
+	Uint64 elapsed = end_ticks - fence->start_ticks;
+
+	fence->rolling_accumulator += elapsed;
+	fence->sample_counter++;
+
+	if (fence->sample_counter >= report_interval) {
+		Uint64 avg_ticks = fence->rolling_accumulator / fence->sample_counter;
+		double frequency = (double) SDL_GetPerformanceFrequency();
+		double avg_milliseconds = ((double) avg_ticks * 1000.0) / frequency;
+
+		SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+					"[PERF_TELEMETRY] %s over %u frames: Avg Ticks: %llu | Avg Time: %.4f ms\n",
+					token_identifier, report_interval, (unsigned long long) avg_ticks,
+					avg_milliseconds);
+
+		fence->rolling_accumulator = 0;
+		fence->sample_counter = 0;
+	}
+	fence->start_ticks = 0;
+}
+#endif
+
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase) {
@@ -305,6 +352,9 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 								  0.0f);
 
 	/* 1. Pre-Baked Pendulum & Halo Blit Pass */
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryBegin(&ctx->metrics.tail_halo);
+#endif
 	if (ctx->tail_atlas.texture) {
 		int total_tail_frames = ctx->tail_atlas.total_frames;
 		int tail_idx = (int) (ctx->current_frame_step % total_tail_frames);
@@ -316,24 +366,24 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		SDL_FRect base_dst = { 27.0f, 200.0f, 96.0f, 96.0f };
 
 		if (!actual_disable_outline && tail_halo_blueprint.texture) {
-			SDL_SetTextureBlendMode(tail_halo_blueprint.texture, SDL_BLENDMODE_BLEND);
-			SDL_SetTextureColorMod(tail_halo_blueprint.texture, 255, 255, 255);
-			SDL_SetTextureAlphaMod(tail_halo_blueprint.texture, 255);
 			SDL_RenderTexture(renderer, tail_halo_blueprint.texture,
 							  &tail_halo_blueprint.src_rects[tail_idx], &base_dst);
 		}
 
-		SDL_SetTextureBlendMode(ctx->tail_atlas.texture, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->tail_atlas.texture, 255, 255, 255);
-		SDL_SetTextureAlphaMod(ctx->tail_atlas.texture, 255);
 		SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx],
 						  &base_dst);
 	}
-
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryEnd(&ctx->metrics.tail_halo, ctx->metrics.logging_frequency,
+						  "SHUFFLE_TAIL_HALO");
+#endif
 	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color, 0.0f, 0.0f);
 	CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->tie_color);
 
 	/* 2. Moving Eyes Blit Shuffling Pass */
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryBegin(&ctx->metrics.eyes_pupils);
+#endif
 	if (ctx->eyes_atlas.texture) {
 		int total_eye_frames = ctx->eyes_atlas.total_frames;
 		int frame_idx = (int) (ctx->current_frame_step % total_eye_frames);
@@ -343,11 +393,16 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 		SDL_FRect eyes_src_rect = ctx->eyes_atlas.src_rects[frame_idx];
 		SDL_FRect eyes_dst_rect = { 44.0f, 26.0f, 64.0f, 32.0f };
 
-		SDL_SetTextureBlendMode(ctx->eyes_atlas.texture, SDL_BLENDMODE_BLEND);
 		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 	}
-
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryEnd(&ctx->metrics.eyes_pupils, ctx->metrics.logging_frequency,
+						  "SHUFFLE_EYES_PUPILS");
+#endif
 	/* 3. Pre-Baked Clock Hands Blit Pass */
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryBegin(&ctx->metrics.clock_hands);
+#endif
 	if (ctx->hands_atlas.texture && ctx->minutes_atlas.texture && ctx->seconds_atlas.texture) {
 		int h_idx = hour_phase < 0 || hour_phase >= TOTAL_PHASES ? 0 : hour_phase;
 		int m_idx = minute_phase < 0 || minute_phase >= TOTAL_PHASES ? 0 : minute_phase;
@@ -355,27 +410,21 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 
 		SDL_FRect dst = { 74.0f - 32.0f, 150.0f - 48.0f, 64.0f, 96.0f };
 
-		/* Tint the white mask layers correctly using your high-contrast options */
-		SDL_SetTextureBlendMode(ctx->hands_atlas.texture, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->hands_atlas.texture, ctx->hour_color.r, ctx->hour_color.g,
-							   ctx->hour_color.b);
+		/* Optimized Zero-Cost Shuffling Loop Pass */
 		SDL_RenderTexture(renderer, ctx->hands_atlas.texture, &ctx->hands_atlas.src_rects[h_idx],
 						  &dst);
-
-		SDL_SetTextureBlendMode(ctx->minutes_atlas.texture, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureColorMod(ctx->minutes_atlas.texture, ctx->minute_color.r, ctx->minute_color.g,
-							   ctx->minute_color.b);
 		SDL_RenderTexture(renderer, ctx->minutes_atlas.texture,
 						  &ctx->minutes_atlas.src_rects[m_idx], &dst);
 
 		if (!ctx->hide_seconds) {
-			SDL_SetTextureBlendMode(ctx->seconds_atlas.texture, SDL_BLENDMODE_BLEND);
-			SDL_SetTextureColorMod(ctx->seconds_atlas.texture, ctx->second_color.r,
-								   ctx->second_color.g, ctx->second_color.b);
 			SDL_RenderTexture(renderer, ctx->seconds_atlas.texture,
 							  &ctx->seconds_atlas.src_rects[s_idx], &dst);
 		}
 	}
+#ifdef CATCLOCK_TELEMETRY
+	CatClock_TelemetryEnd(&ctx->metrics.clock_hands, ctx->metrics.logging_frequency,
+						  "SHUFFLE_CLOCK_HANDS");
+#endif
 
 #ifdef CATCLOCK_DEBUG
 	if (ctx->tail_atlas.texture) {

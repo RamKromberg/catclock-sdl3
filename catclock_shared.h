@@ -48,6 +48,23 @@ typedef struct {
 
 typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
 
+/* --- PERFORMANCE TELEMETRY MONITORING SUBSYSTEM --- */
+#ifdef CATCLOCK_TELEMETRY
+typedef struct {
+	Uint64 start_ticks;
+	Uint64 rolling_accumulator;
+	Uint32 sample_counter;
+} CatClock_TelemetryFence;
+
+typedef struct {
+	CatClock_TelemetryFence tail_halo;
+	CatClock_TelemetryFence eyes_pupils;
+	CatClock_TelemetryFence clock_hands;
+	Uint32 logging_frequency;
+} CatClock_TelemetryContext;
+#endif
+/* -------------------------------------------------- */
+
 // Unified App Context with Feature Restoration Flags
 typedef struct {
 	int current_win_w;
@@ -90,6 +107,10 @@ typedef struct {
 	SDL_Color detail_color; /* -detailcolor */
 	SDL_Color sclera_color; /* -scleracolor */
 	SDL_Color window_bg_color; /* Optional -decorations hex override */
+#ifdef CATCLOCK_TELEMETRY
+	/* Hardware pipeline diagnostic telemetry metrics */
+	CatClock_TelemetryContext metrics;
+#endif
 } CatClock_AppContext;
 
 // =================================================================
