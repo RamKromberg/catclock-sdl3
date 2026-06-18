@@ -13,9 +13,8 @@ pkgs.mkShell {
     imagemagick
     clang-tools # $ make format
     bc # ./track.sh
-    openssl # ./gen_cert.sh
-    osslsigncode
-    #mupdf-headless # $ ./pack_source_mutool.sh ; mutool info ./catclock_repository_dump.pdf
+    osslsigncode openssl # ./gen_cert.sh
+    qpdf # ./pack_source.sh
   ];
 
   buildInputs = [

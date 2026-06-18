@@ -7,7 +7,10 @@ file_targets="*.[ch] Makefile README.md shell.nix gen_cert.sh"
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)
 tmp_pdf_body=$(mktemp)
-trap 'rm -f "$tmp_payload" "$tmp_text_blocks" "$tmp_pdf_body"' EXIT INT TERM
+tmp_uncompressed_pdf=$(mktemp) # Temporary storage for raw assembly
+
+# Clean up all temporary files on script termination
+trap 'rm -f "$tmp_payload" "$tmp_text_blocks" "$tmp_pdf_body" "$tmp_uncompressed_pdf"' EXIT INT TERM
 
 # 1. Build a tight, text-only concatenated payload with no padding zeros
 for file in $file_targets; do
@@ -70,8 +73,8 @@ printf "2 0 obj\n<< /Type /Pages /Kids [%s] /Count %d >>\nendobj\n" "$page_kids_
 
 exec {BODY_FD}>&-
 
-# 3. Assemble Final Output Document
-exec 3> "$output_pdf"
+# 3. Assemble Uncompressed Document
+exec 3> "$tmp_uncompressed_pdf"
 
 printf "%%PDF-1.4\n" >&3
 header_shift=9
@@ -92,29 +95,31 @@ done
 printf "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" "$next_obj_id" "$xref_start" >&3
 exec 3>&-
 
-echo "Success! Standard-compliant multi-page visual PDF saved cleanly to $output_pdf."
+# 4. Compression Stage (Optional)
+# Uses qpdf if available to compress page streams and generate optimized object streams.
+if command -v qpdf >/dev/null 2>&1; then
+    qpdf --compress-streams=y --object-streams=disable --recompress-flate "$tmp_uncompressed_pdf" "$output_pdf"
+    echo "Success! High-density optimized compressed PDF saved cleanly to $output_pdf."
+else
+    cp "$tmp_uncompressed_pdf" "$output_pdf"
+    echo "Success! saved uncompressed PDF to $output_pdf (qpdf not found)."
+fi
+
+echo ""
+echo "Drop $output_pdf into Gemini and use the following prompt:"
+echo "--------------------------------------------------------"
+cat << EOF
+## 🛠️ Stage 1: 📥 Repository Analysis Protocol
+Read and parse the contents of the attached $output_pdf.
+## Execution Instructions:
+
+   1. Extract Repository Files: Read through the document to identify individual files separated by the boundary markers (formatted as ===FILE:filepath===).
+   2. Verify Manifest: Ensure all source files mentioned in the document are fully accounted for.
+
+## Output Requirement:
+   1. List the confirmed file manifest inventory (e.g., catclock_main.c, Makefile, shell.nix, etc.).
+   2. End the response immediately after the list.
+EOF
+echo "--------------------------------------------------------"
 
 exit
-
-<<'COMMENT'
-
-Prompt example:
-
-    ## 5. 📥 CRITICAL SYSTEM RE-LOADING PROTOCOL (Text Map PDF Ingestion)
-    To begin your analysis, unpack the master context repository block from the continuous data stream hidden across the text layers of the attached 'catclock_repository_dump.pdf'.
-
-    The data stream on the visual pages is a unified alphanumeric sequence representing a single text-concatenated block map that has been encoded into Base64, wrapped to an 80-character line limit.
-
-    ### Execution Instructions for Data Recovery:
-    1. **Reconstruct the Master Payload**: Scan all pages of the document sequentially. Extract all raw Base64 character blocks found between the PDF text operator parentheses (e.g., `(...) Tj T*`). Ignore literal PDF structural syntax flags (such as 'BT', 'ET', 'obj', 'stream', etc.), skip page headers, and discard all layout line breaks. Concatenate everything into a single continuous, unbroken string.
-    2. **Sanitize Escape Characters**: The packer script explicitly escapes literal parenthetical marks within the text layout streams. Strip out all structural escape backslashes (reverse `\(` and `\)` back to raw `(` and `)`) from the consolidated alphanumeric block prior to decoding.
-    3. **Decode the Base64 Layer**: Convert the sanitized, continuous alphanumeric string back into its raw binary/text payload.
-    4. **Parse the Custom Text Matrix**: Read the decoded raw text stream using a line-by-line state engine. Identify the boundary markers formatted exactly as `===FILE:filepath===`.
-    5. **Extract to a Sandbox Directory**: Reconstitute individual target files from the boundaries into a dedicated target subdirectory. When a new file marker is found, create the required nested directory paths if necessary, and write the proceeding text lines into that file until the next marker or EOF is encountered.
-    6. **Execute Structural Integrity Validation**: Verify that each target file name discovered matches the code block markers perfectly and that no payload content blocks are missing or empty.
-    7. **Workspace Cleanup**: Ensure the intermediate decoded memory payload stream is freed cleanly upon successfully separating the structural text components into individual repository code files.
-
-    ### Output Requirement:
-    Perform this global assembly and verification first before analyzing individual components. Once decoded, verified, and unpacked, list the confirmed file manifest inventory (e.g., `catclock_main.c`, `Makefile`, `shell.nix`, etc.). Display each recovered source file clearly under its own distinct Markdown header, followed by its complete, unedited source code block. Do not truncate, summarize, or alter any lines of code during reconstruction.
-
-COMMENT
