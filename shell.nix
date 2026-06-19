@@ -1,4 +1,4 @@
-{ pkgs ? import <nixpkgs> {} }:
+{ pkgs ? import <nixpkgs> { config = { allowUnfree = true; }; } }:
 
 let
   windowsPkgs = pkgs.pkgsCross.mingwW64;
@@ -15,6 +15,13 @@ pkgs.mkShell {
     bc # ./track.sh
     osslsigncode openssl # ./gen_cert.sh
     qpdf # ./pack_source.sh
+    # --- GPU MONITORING PACKAGES ---
+    # for Intel xe graphics driver, the track.sh script does the job well enough.
+    #nvtopPackages.intel
+    #nvtopPackages.amd
+    #nvtopPackages.full
+    #intel-gpu-tools
+    #amdgpu_top
   ];
 
   buildInputs = [
