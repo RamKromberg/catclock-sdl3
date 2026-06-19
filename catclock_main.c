@@ -63,8 +63,11 @@ int main(int argc, char* argv[]) {
 	ctx.metrics.logging_frequency = (target_fps_limit <= 0 ? 30 : target_fps_limit) * 5;
 #endif
 
-	int target_w = (int) (BASELINE_CANVAS_W * ctx.current_scale);
-	int target_h = (int) (BASELINE_CANVAS_H * ctx.current_scale);
+	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
+	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 288.0f;
+
+	int target_w = (int) (baseline_w * ctx.current_scale);
+	int target_h = (int) (baseline_h * ctx.current_scale);
 
 	SDL_WindowFlags window_flags = 0;
 
@@ -133,8 +136,8 @@ int main(int argc, char* argv[]) {
 					if (ctx.current_scale > 10.0f)
 						ctx.current_scale = 10.0f;
 					if (ctx.current_scale != old_scale) {
-						SDL_SetWindowSize(window, (int) (BASELINE_CANVAS_W * ctx.current_scale),
-										  (int) (BASELINE_CANVAS_H * ctx.current_scale));
+						SDL_SetWindowSize(window, (int) roundf(baseline_w * ctx.current_scale),
+										  (int) roundf(baseline_h * ctx.current_scale));
 						CatClock_OnWindowResize(NULL, &ctx, renderer);
 					}
 				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
@@ -143,24 +146,25 @@ int main(int argc, char* argv[]) {
 					if (ctx.current_scale < 0.5f)
 						ctx.current_scale = 0.5f;
 					if (ctx.current_scale != old_scale) {
-						SDL_SetWindowSize(window, (int) (BASELINE_CANVAS_W * ctx.current_scale),
-										  (int) (BASELINE_CANVAS_H * ctx.current_scale));
+						SDL_SetWindowSize(window, (int) roundf(baseline_w * ctx.current_scale),
+										  (int) roundf(baseline_h * ctx.current_scale));
 						CatClock_OnWindowResize(NULL, &ctx, renderer);
 					}
 				}
 			} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
 				float old_scale = ctx.current_scale;
-				if (event.wheel.y > 0.0f)
+				if (event.wheel.y > 0.0f) {
 					ctx.current_scale += 0.5f;
-				else if (event.wheel.y < 0.0f)
+				} else if (event.wheel.y < 0.0f) {
 					ctx.current_scale -= 0.5f;
+				}
 				if (ctx.current_scale < 0.5f)
 					ctx.current_scale = 0.5f;
 				if (ctx.current_scale > 10.0f)
 					ctx.current_scale = 10.0f;
 				if (ctx.current_scale != old_scale) {
-					SDL_SetWindowSize(window, (int) (BASELINE_CANVAS_W * ctx.current_scale),
-									  (int) (BASELINE_CANVAS_H * ctx.current_scale));
+					SDL_SetWindowSize(window, (int) roundf(baseline_w * ctx.current_scale),
+									  (int) roundf(baseline_h * ctx.current_scale));
 					CatClock_OnWindowResize(NULL, &ctx, renderer);
 				}
 			}
@@ -195,13 +199,11 @@ int main(int argc, char* argv[]) {
 			/* 4. Display the composite layer graphics onto the window backbuffer */
 			if (!ctx.is_window_minimized) {
 				SDL_SetRenderTarget(renderer, NULL);
-
 				SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 				SDL_RenderClear(renderer);
 
 				if (ctx.master_composite_layer) {
 					SDL_SetTextureBlendMode(ctx.master_composite_layer, SDL_BLENDMODE_BLEND);
-
 					SDL_FRect display_rect
 						= { 0.0f, 0.0f, (float) ctx.current_win_w, (float) ctx.current_win_h };
 					SDL_RenderTexture(renderer, ctx.master_composite_layer, NULL, &display_rect);
@@ -232,8 +234,9 @@ int main(int argc, char* argv[]) {
 	CatClock_DestroyComputeAtlas(&ctx.eyes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.tail_atlas);
 
-	if (ctx.master_composite_layer)
+	if (ctx.master_composite_layer) {
 		SDL_DestroyTexture(ctx.master_composite_layer);
+	}
 
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
 	SDL_DestroyRenderer(renderer);

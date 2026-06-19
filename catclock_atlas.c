@@ -53,9 +53,15 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 								 CatClock_ShaderCallback shader, void* userdata) {
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
-	float scale = (float) win_w / BASELINE_CANVAS_W;
+
+	CATCLOCK_LOG_DIAG(&ctx, "win_w=%d, win_h=%d, scale=%.4f, frames=%d", win_w, win_h,
+					  ctx.current_scale, total_frames);
+
+	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
+	float scale = (float) win_w / baseline_w;
 	if (scale <= 0.0f)
 		scale = 1.0f;
+	scale = roundf(scale * 2.0f) / 2.0f;
 
 	if (atlas->texture && scale == atlas->last_scale && total_frames == atlas->total_frames) {
 		return;
@@ -68,6 +74,13 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 
 	atlas->cell_w = (int) ceilf((float) cell_base_w * scale) + 2;
 	atlas->cell_h = (int) ceilf((float) cell_base_h * scale) + 2;
+
+#ifdef CATCLOCK_DIAGNOSTIC
+	/* --- ATLAS DIMENSION MONITOR --- */
+	SDL_Log("[DIAG REBAKE CELL] base=%dx%d -> calculated=%dx%d, final_scale=%.4f", cell_base_w,
+			cell_base_h, atlas->cell_w, atlas->cell_h, scale);
+	/* -------------------------------- */
+#endif
 
 	atlas->src_rects = (SDL_FRect*) SDL_malloc(sizeof(SDL_FRect) * total_frames);
 	if (!atlas->src_rects)
@@ -261,20 +274,37 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 
 	SDL_Renderer* renderer = *renderer_ptr;
 	(void) sway_deg;
-	bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
+	bool actual_disable_outline = ctx->disable_outline;
 
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
-	float runtime_scale = (float) win_w / BASELINE_CANVAS_W;
+	float baseline_w = ctx->use_decorations ? DECORATED_CANVAS_W : 103.0f;
+	float runtime_scale = (float) win_w / baseline_w;
 	if (runtime_scale <= 0.01f)
 		runtime_scale = 1.0f;
 
-	int calculated_cell_w = (int) ceilf(24.0f * runtime_scale);
-	int calculated_cell_h = (int) ceilf(24.0f * runtime_scale);
-	if (calculated_cell_w < 24)
-		calculated_cell_w = 24;
-	if (calculated_cell_h < 24)
-		calculated_cell_h = 24;
+	/* Snap the primary scale factor to eliminate fractional window rounding noise */
+	runtime_scale = roundf(runtime_scale * 2.0f) / 2.0f;
+
+	int calculated_cell_w = (int) ceilf(64.0f * runtime_scale);
+	int calculated_cell_h = (int) ceilf(32.0f * runtime_scale);
+
+	if (calculated_cell_w < 64)
+		calculated_cell_w = 64;
+	if (calculated_cell_h < 32)
+		calculated_cell_h = 32;
+
+#ifdef CATCLOCK_DIAGNOSTIC
+	/* --- RUNTIME LAYOUT SCALE DIAGNOSTIC --- */
+	static float last_logged_scale = -1.0f;
+	if (runtime_scale != last_logged_scale) {
+		SDL_Log("[CATCLOCK LOG] Scale Multiplier Calibrated To: %.4f\n", runtime_scale);
+		last_logged_scale = runtime_scale;
+	}
+	CATCLOCK_LOG_DIAG(ctx, "calculated_cell=%dx%d, decorations=%s", calculated_cell_w,
+					  calculated_cell_h, ctx->use_decorations ? "TRUE" : "FALSE");
+	/* --------------------------------------- */
+#endif
 
 	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
 
@@ -367,14 +397,15 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 	}
 	SDL_RenderClear(renderer);
 
-	SDL_SetRenderLogicalPresentation(renderer, 150, 300, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+	SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+
+	float render_pad_x = ctx->use_decorations ? CHOP_OFFSET_X : 0.0f;
+	float render_pad_y = ctx->use_decorations ? CHOP_OFFSET_Y : 0.0f;
+	float visual_pad = ctx->use_decorations ? 0.0f : 1.0f;
 
 	if (!actual_disable_outline) {
 		CatClock_RenderHaloOutline(ctx->xbm_lib, renderer, ctx->bg_color);
 	}
-
-	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->detail_color, 0.0f,
-								  0.0f);
 
 	/* 1. Pre-Baked Pendulum & Halo Blit Pass */
 #ifdef CATCLOCK_TELEMETRY
@@ -388,13 +419,19 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 		if (tail_idx < 0)
 			tail_idx = 0;
 
-		SDL_FRect base_dst = { 27.0f, 200.0f, 96.0f, 96.0f };
-
+		SDL_FRect base_dst = { floorf((3.0f + render_pad_x + visual_pad) * runtime_scale),
+							   floorf((190.0f + render_pad_y + visual_pad) * runtime_scale),
+							   96.0f * runtime_scale, 96.0f * runtime_scale };
+#ifdef CATCLOCK_DIAGNOSTIC
+		/* --- COORDINATE TARGET PASSPORT DIAGNOSTIC --- */
+		SDL_Log("[DIAG LAYOUT TARGETS] pad_x=%.1f, pad_y=%.1f, tail_dst.x=%.1f, tail_dst.y=%.1f",
+				render_pad_x, render_pad_y, base_dst.x, base_dst.y);
+		/* --------------------------------------------- */
+#endif
 		if (!actual_disable_outline && tail_halo_blueprint.texture) {
 			SDL_RenderTexture(renderer, tail_halo_blueprint.texture,
 							  &tail_halo_blueprint.src_rects[tail_idx], &base_dst);
 		}
-
 		SDL_RenderTexture(renderer, ctx->tail_atlas.texture, &ctx->tail_atlas.src_rects[tail_idx],
 						  &base_dst);
 	}
@@ -402,8 +439,12 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 	CatClock_TelemetryEnd(&ctx->metrics.tail_halo, ctx->metrics.logging_frequency,
 						  "SHUFFLE_TAIL_HALO");
 #endif
-	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color, 0.0f, 0.0f);
-	CatClock_RenderXbmLayer(ctx->xbm_lib, renderer, "cattie", ctx->tie_color);
+	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catback", ctx->cat_color,
+								  render_pad_x + visual_pad, render_pad_y + visual_pad);
+	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "catwhite", ctx->detail_color,
+								  render_pad_x + visual_pad, render_pad_y + visual_pad);
+	CatClock_RenderXbmLayerOffset(ctx->xbm_lib, renderer, "cattie", ctx->tie_color,
+								  render_pad_x + visual_pad, render_pad_y + visual_pad);
 
 	/* 2. Moving Eyes Blit Shuffling Pass */
 #ifdef CATCLOCK_TELEMETRY
@@ -416,7 +457,10 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 			frame_idx = 0;
 
 		SDL_FRect eyes_src_rect = ctx->eyes_atlas.src_rects[frame_idx];
-		SDL_FRect eyes_dst_rect = { 44.0f, 26.0f, 64.0f, 32.0f };
+		SDL_FRect eyes_dst_rect
+			= { floorf((20.0f + render_pad_x + visual_pad) * runtime_scale),
+				floorf((16.0f + render_pad_y + visual_pad) * runtime_scale),
+				((float) ctx->eyes_atlas.cell_w - 1.0f), ((float) ctx->eyes_atlas.cell_h - 1.0f) };
 
 		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 	}
@@ -433,17 +477,20 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 		int m_idx = minute_phase < 0 || minute_phase >= TOTAL_PHASES ? 0 : minute_phase;
 		int s_idx = second_phase < 0 || second_phase >= TOTAL_PHASES ? 0 : second_phase;
 
-		SDL_FRect dst = { 74.0f - 32.0f, 150.0f - 48.0f, 64.0f, 96.0f };
+		SDL_FRect hands_dst_rect
+			= { floorf((18.0f + render_pad_x + visual_pad) * runtime_scale),
+				floorf((92.0f + render_pad_y + visual_pad) * runtime_scale),
+				(float) ctx->hands_atlas.cell_w, (float) ctx->hands_atlas.cell_h };
 
 		/* Optimized Zero-Cost Shuffling Loop Pass */
 		SDL_RenderTexture(renderer, ctx->hands_atlas.texture, &ctx->hands_atlas.src_rects[h_idx],
-						  &dst);
+						  &hands_dst_rect);
 		SDL_RenderTexture(renderer, ctx->minutes_atlas.texture,
-						  &ctx->minutes_atlas.src_rects[m_idx], &dst);
+						  &ctx->minutes_atlas.src_rects[m_idx], &hands_dst_rect);
 
 		if (!ctx->hide_seconds) {
 			SDL_RenderTexture(renderer, ctx->seconds_atlas.texture,
-							  &ctx->seconds_atlas.src_rects[s_idx], &dst);
+							  &ctx->seconds_atlas.src_rects[s_idx], &hands_dst_rect);
 		}
 	}
 #ifdef CATCLOCK_TELEMETRY

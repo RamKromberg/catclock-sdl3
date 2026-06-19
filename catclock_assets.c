@@ -18,13 +18,14 @@
 #include "catclock_shared.h"
 #include "catclock_xbm.h"
 // clang-format on
+#include <math.h>
 #include <string.h>
 
 typedef struct {
 	SDL_Texture* texture;
 	int w;
 	int h;
-	char layer_name[16];
+	char layer_name[64];
 } AssetNode;
 
 struct CatClock_XbmLibrary {
@@ -87,16 +88,20 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 		SDL_SetTextureAlphaMod(target->texture, color.a);
 
 		SDL_FRect dst;
+		float runtime_scale = ctx.current_scale;
+
 		if (SDL_strcmp(layer_id, "eyes") == 0) {
-			dst.x = 49.0f + offset_x;
-			dst.y = 30.0f + offset_y;
-			dst.w = (float) target->w;
-			dst.h = (float) target->h;
+			dst.x = floorf((20.0f + offset_x) * runtime_scale);
+			dst.y = floorf((16.0f + offset_y) * runtime_scale);
+			dst.w = (float) target->w * runtime_scale;
+			dst.h = (float) target->h * runtime_scale;
 		} else {
-			dst.x = offset_x;
-			dst.y = offset_y;
-			dst.w = BASELINE_CANVAS_W;
-			dst.h = BASELINE_CANVAS_H;
+			dst.x = floorf(offset_x * runtime_scale);
+			dst.y = floorf(offset_y * runtime_scale);
+			/* Core architectural fix: always render the actual underlying physical cropped texture
+			 * bounds */
+			dst.w = BASELINE_CANVAS_W * runtime_scale;
+			dst.h = BASELINE_CANVAS_H * runtime_scale;
 		}
 		SDL_RenderTexture(renderer, target->texture, NULL, &dst);
 	}
@@ -104,7 +109,12 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 
 void CatClock_RenderXbmLayer(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, const char* layer_id,
 							 SDL_Color color) {
-	CatClock_RenderXbmLayerOffset(lib, renderer, layer_id, color, 0.0f, 0.0f);
+	float render_pad_x = ctx.use_decorations ? CHOP_OFFSET_X : 0.0f;
+	float render_pad_y = ctx.use_decorations ? CHOP_OFFSET_Y : 0.0f;
+	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
+
+	CatClock_RenderXbmLayerOffset(lib, renderer, layer_id, color, render_pad_x + visual_pad,
+								  render_pad_y + visual_pad);
 }
 
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color) {
@@ -119,11 +129,21 @@ void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer
 	SDL_SetTextureColorMod(lib->catbackground.texture, color.r, color.g, color.b);
 	SDL_SetTextureAlphaMod(lib->catbackground.texture, color.a);
 
+	float render_pad_x = ctx.use_decorations ? CHOP_OFFSET_X : 0.0f;
+	float render_pad_y = ctx.use_decorations ? CHOP_OFFSET_Y : 0.0f;
+	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
+
+	float runtime_scale = ctx.current_scale;
+
 	for (float dx = -1.0f; dx <= 1.0f; dx += 1.0f) {
 		for (float dy = -1.0f; dy <= 1.0f; dy += 1.0f) {
 			if (dx == 0.0f && dy == 0.0f)
 				continue;
-			SDL_FRect dst = { dx, dy, BASELINE_CANVAS_W, BASELINE_CANVAS_H };
+
+			SDL_FRect dst
+				= { floorf((render_pad_x + visual_pad + dx) * runtime_scale),
+					floorf((render_pad_y + visual_pad + dy) * runtime_scale),
+					BASELINE_CANVAS_W * runtime_scale, BASELINE_CANVAS_H * runtime_scale };
 			SDL_RenderTexture(renderer, lib->catbackground.texture, NULL, &dst);
 		}
 	}
@@ -148,13 +168,13 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id) {
 	if (!lib || !layer_id)
 		return NULL;
-	if (strcmp(layer_id, "catback") == 0)
+	if (SDL_strcmp(layer_id, "catback") == 0)
 		return lib->catbackground.texture;
-	if (strcmp(layer_id, "catwhite") == 0)
+	if (SDL_strcmp(layer_id, "catwhite") == 0)
 		return lib->catoutline.texture;
-	if (strcmp(layer_id, "cattie") == 0)
+	if (SDL_strcmp(layer_id, "cattie") == 0)
 		return lib->necktie.texture;
-	if (strcmp(layer_id, "eyes") == 0)
+	if (SDL_strcmp(layer_id, "eyes") == 0)
 		return lib->eyesocket.texture;
 	return NULL;
 }

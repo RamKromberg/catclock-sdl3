@@ -17,7 +17,18 @@
 #ifndef CATCLOCK_ATLAS_H
 #define CATCLOCK_ATLAS_H
 
+#include "catclock_shared.h"
 #include <SDL3/SDL.h>
+
+void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* ctx,
+							 SDL_Renderer* renderer);
+void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
+										 float sway_deg, int hour_phase, int minute_phase,
+										 int second_phase);
+void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
+void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
+								 int cell_base_w, int cell_base_h, int total_frames, int cols,
+								 CatClock_ShaderCallback shader, void* userdata);
 
 /* Asset Layer Typings */
 #define HAND_TYPE_HOUR 0

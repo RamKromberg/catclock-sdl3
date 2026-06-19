@@ -24,8 +24,14 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define BASELINE_CANVAS_W 150.0f
-#define BASELINE_CANVAS_H 300.0f
+/* Absolute Physical Hardware Mapping Geometry Definitions */
+#define BASELINE_CANVAS_W 101.0f
+#define BASELINE_CANVAS_H 201.0f
+#define DECORATED_CANVAS_W 150.0f
+#define DECORATED_CANVAS_H 300.0f
+#define CHOP_OFFSET_X 24.0f
+#define CHOP_OFFSET_Y 10.0f
+
 #define CYCLE_PERIOD_MS 2000
 #define TOTAL_PHASES 60
 
@@ -168,5 +174,20 @@ void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 						 void* userdata);
 void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
 						 void* userdata);
+
+#ifdef CATCLOCK_DIAGNOSTIC
+/* Swaps out the static pointer check for a live frame initialization step match */
+#define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \
+	do {                                                                                           \
+		if ((ctx_ptr)->current_frame_step % 60 == 0) {                                             \
+			SDL_Log("[DIAG COMPRESSED] " fmt, ##__VA_ARGS__);                                      \
+		}                                                                                          \
+	} while (0)
+#else
+/* Compiles out completely with zero machine-instruction overhead */
+#define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \
+	do {                                                                                           \
+	} while (0)
+#endif
 
 #endif /* CATCLOCK_SHARED_H */
