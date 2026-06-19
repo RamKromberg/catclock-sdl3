@@ -253,12 +253,13 @@ void CatClock_TelemetryEnd(CatClock_TelemetryFence* fence, Uint32 report_interva
 }
 #endif
 
-void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppContext* ctx,
+void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase) {
-	if (!ctx || !renderer)
+	if (!ctx || !renderer_ptr || !*renderer_ptr)
 		return;
 
+	SDL_Renderer* renderer = *renderer_ptr;
 	(void) sway_deg;
 	bool actual_disable_outline = ctx->disable_outline || ctx->use_decorations;
 
@@ -278,6 +279,18 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
 
 	if (!ctx->master_composite_layer || ctx->texture_cache_stale || !ctx->eye_clipping_stencil) {
+
+		/* ----------------------------------------------------------------- */
+		/* CONTEXT RECYCLING ENG-BLOCK: FLUSH EVERY ANONYMOUS DRIVER SHEET  */
+		/* ----------------------------------------------------------------- */
+		/* 1. Demolish logical pre-baked compute atlases */
+		CatClock_DestroyComputeAtlas(&ctx->hands_atlas);
+		CatClock_DestroyComputeAtlas(&ctx->minutes_atlas);
+		CatClock_DestroyComputeAtlas(&ctx->seconds_atlas);
+		CatClock_DestroyComputeAtlas(&ctx->eyes_atlas);
+		CatClock_DestroyComputeAtlas(&ctx->tail_atlas);
+		CatClock_DestroyComputeAtlas(&tail_halo_blueprint);
+
 		if (ctx->master_composite_layer) {
 			SDL_DestroyTexture(ctx->master_composite_layer);
 			ctx->master_composite_layer = NULL;
@@ -286,12 +299,24 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 			SDL_DestroyTexture(ctx->eye_clipping_stencil);
 			ctx->eye_clipping_stencil = NULL;
 		}
-		CatClock_DestroyComputeAtlas(&ctx->hands_atlas);
-		CatClock_DestroyComputeAtlas(&ctx->minutes_atlas);
-		CatClock_DestroyComputeAtlas(&ctx->seconds_atlas);
-		CatClock_DestroyComputeAtlas(&ctx->eyes_atlas);
-		CatClock_DestroyComputeAtlas(&ctx->tail_atlas);
-		CatClock_DestroyComputeAtlas(&tail_halo_blueprint);
+
+		/* 2. Discard original 1x structural texture templates */
+		if (ctx->xbm_lib) {
+			CatClock_DestroyXbmLibrary(ctx->xbm_lib);
+			ctx->xbm_lib = NULL;
+		}
+
+		/* 3. Re-instantiate the core hardware renderer engine instance */
+		SDL_Window* parent_window = SDL_GetRenderWindow(renderer);
+		if (parent_window) {
+			SDL_DestroyRenderer(renderer);
+			renderer = SDL_CreateRenderer(parent_window, NULL);
+			*renderer_ptr = renderer; /* Export updated driver address back to main */
+
+			/* Reload base XBM templates into the pristine context */
+			ctx->xbm_lib = CatClock_InitXbmLibrary(renderer);
+		}
+		/* ----------------------------------------------------------------- */
 
 		ctx->master_composite_layer
 			= SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_TARGET,
@@ -433,4 +458,5 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer* renderer, CatClock_AppCon
 #endif
 
 	SDL_SetRenderTarget(renderer, old_target);
+	*renderer_ptr = renderer;
 }

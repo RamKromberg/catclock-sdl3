@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
 			}
 
 			/* 3. Flush asset draw calls directly to the master composite target texture */
-			CatClock_SynchronizePipelineAtlases(renderer, &ctx, 0.0f, hour_phase, minute_phase,
+			CatClock_SynchronizePipelineAtlases(&renderer, &ctx, 0.0f, hour_phase, minute_phase,
 												second_phase);
 
 			/* 4. Display the composite layer graphics onto the window backbuffer */
