@@ -190,7 +190,7 @@ void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAt
 
 	int output_w = 0, output_h = 0;
 	SDL_GetRenderOutputSize(renderer, &output_w, &output_h);
-	float active_runtime_scale = (float) output_w / 150.0f;
+	float active_runtime_scale = atlas->last_scale;
 
 	static Uint64 startup_initialization_timestamp = 0;
 	if (startup_initialization_timestamp == 0) {

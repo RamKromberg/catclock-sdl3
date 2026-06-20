@@ -113,6 +113,11 @@ typedef struct {
 	SDL_Color detail_color; /* -detailcolor */
 	SDL_Color sclera_color; /* -scleracolor */
 	SDL_Color window_bg_color; /* Optional -decorations hex override */
+
+	// 1-bit static lookup geometry tables
+	int hitbox_mask_w;
+	int hitbox_mask_h;
+	uint8_t* hitbox_bitmask;
 #ifdef CATCLOCK_TELEMETRY
 	/* Hardware pipeline diagnostic telemetry metrics */
 	CatClock_TelemetryContext metrics;

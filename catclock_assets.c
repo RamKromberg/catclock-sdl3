@@ -98,8 +98,7 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 		} else {
 			dst.x = floorf(offset_x * runtime_scale);
 			dst.y = floorf(offset_y * runtime_scale);
-			/* Core architectural fix: always render the actual underlying physical cropped texture
-			 * bounds */
+			/* Always render the actual underlying physical cropped texture bounds */
 			dst.w = BASELINE_CANVAS_W * runtime_scale;
 			dst.h = BASELINE_CANVAS_H * runtime_scale;
 		}

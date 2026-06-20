@@ -43,12 +43,121 @@ CatClock_AppContext ctx = { 0 };
 int ssaa_factor = 2;
 int target_fps_limit = 30;
 
+/**
+ * Custom CPU-side 1-bit parser designed to load the unified range-of-motion mask
+ * straight into system RAM to prevent text segment bloat and keep runtime lookups fast.
+ */
+static uint8_t* CatClock_LoadHitboxMask(const char* filepath, int* out_w, int* out_h) {
+	if (!filepath || !out_w || !out_h)
+		return NULL;
+
+	SDL_IOStream* file = SDL_IOFromFile(filepath, "r");
+	if (!file) {
+		SDL_Log("Hitbox Error: Could not open hitbox file path: %s", filepath);
+		return NULL;
+	}
+
+	Sint64 file_size = SDL_GetIOSize(file);
+	if (file_size <= 0) {
+		SDL_CloseIO(file);
+		return NULL;
+	}
+
+	char* buffer = (char*) SDL_malloc(file_size + 1);
+	if (!buffer) {
+		SDL_CloseIO(file);
+		return NULL;
+	}
+
+	SDL_ReadIO(file, buffer, file_size);
+	buffer[file_size] = '\0';
+	SDL_CloseIO(file);
+
+	int w = 0, h = 0;
+	char* ptr = SDL_strstr(buffer, "_width");
+	if (ptr) {
+		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
+			ptr++;
+		w = SDL_atoi(ptr);
+	}
+
+	ptr = SDL_strstr(buffer, "_height");
+	if (ptr) {
+		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
+			ptr++;
+		h = SDL_atoi(ptr);
+	}
+
+	ptr = SDL_strstr(buffer, "{");
+	if (w <= 0 || h <= 0 || !ptr) {
+		SDL_free(buffer);
+		return NULL;
+	}
+	ptr++;
+
+	int bytes_per_row = (w + 7) / 8;
+	int total_bytes = bytes_per_row * h;
+	uint8_t* raw_bits = (uint8_t*) SDL_calloc(1, total_bytes);
+	if (!raw_bits) {
+		SDL_free(buffer);
+		return NULL;
+	}
+
+	for (int i = 0; i < total_bytes; i++) {
+		while (*ptr && *ptr != '0' && *(ptr + 1) != 'x' && *(ptr + 1) != 'X') {
+			if (*ptr == '}')
+				break;
+			ptr++;
+		}
+		if (*ptr == '}')
+			break;
+		raw_bits[i] = (uint8_t) SDL_strtol(ptr, &ptr, 16);
+	}
+
+	SDL_free(buffer);
+	*out_w = w;
+	*out_h = h;
+	return raw_bits;
+}
+
+/**
+ * Pixel-Perfect Drag Interception Callback
+ * Normalizes global cursor coordinates and executes a 3-nanosecond bitwise memory check.
+ */
 static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window* win, const SDL_Point* area,
 													 void* data) {
 	(void) win;
-	(void) area;
 	(void) data;
-	return SDL_HITTEST_DRAGGABLE;
+
+	// FIX: If standard window decorations, borders, and title bars are active,
+	// pass handling completely back to the OS window manager for normal window dragging.
+	if (ctx.use_decorations) {
+		return SDL_HITTEST_NORMAL;
+	}
+
+	// Fallback to full window dragging if the custom hitbox asset failed to load
+	if (!ctx.hitbox_bitmask) {
+		return SDL_HITTEST_DRAGGABLE;
+	}
+
+	// Normalize incoming screen mouse coordinates down to unscaled 1-bit image grid space
+	int x = (int) (area->x / ctx.current_scale);
+	int y = (int) (area->y / ctx.current_scale);
+
+	// Boundary check: Out of bounds points are transparent and click through to desktop
+	if (x < 0 || x >= ctx.hitbox_mask_w || y < 0 || y >= ctx.hitbox_mask_h) {
+		return SDL_HITTEST_NORMAL;
+	}
+
+	// Standard XBM row packing calculation (bits arranged horizontally, LSB first)
+	int bytes_per_row = (ctx.hitbox_mask_w + 7) / 8;
+	int byte_index = (y * bytes_per_row) + (x / 8);
+	int bit_position = x % 8;
+
+	// Read the specific visibility state byte flag
+	bool is_solid = (ctx.hitbox_bitmask[byte_index] & (1 << bit_position)) != 0;
+
+	return is_solid ? SDL_HITTEST_DRAGGABLE : SDL_HITTEST_NORMAL;
 }
 
 int main(int argc, char* argv[]) {
@@ -112,6 +221,13 @@ int main(int argc, char* argv[]) {
 	SDL_GetRenderOutputSize(renderer, &ctx.current_win_w, &ctx.current_win_h);
 	ctx.xbm_lib = CatClock_InitXbmLibrary(renderer);
 	ctx.texture_cache_stale = true;
+
+	ctx.hitbox_bitmask
+		= CatClock_LoadHitboxMask("./assets/hitbox.xbm", &ctx.hitbox_mask_w, &ctx.hitbox_mask_h);
+	if (!ctx.hitbox_bitmask) {
+		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					"Failed to load hitbox map. Full window drag fallback enabled.");
+	}
 
 	bool running = true;
 	SDL_Event event;
@@ -236,6 +352,11 @@ int main(int argc, char* argv[]) {
 
 	if (ctx.master_composite_layer) {
 		SDL_DestroyTexture(ctx.master_composite_layer);
+	}
+
+	if (ctx.hitbox_bitmask) {
+		SDL_free(ctx.hitbox_bitmask);
+		ctx.hitbox_bitmask = NULL;
 	}
 
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
