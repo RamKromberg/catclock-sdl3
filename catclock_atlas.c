@@ -389,12 +389,19 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 	SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
 	SDL_SetRenderTarget(renderer, ctx->master_composite_layer);
 
+#ifdef CATCLOCK_CHROMA
+	// CHROMA KEY BACKDROP: Force a solid, intense blue backdrop pass with full opaque alpha!
+	// This turns all empty transparent space into an unambiguous high-contrast visual signal.
+	SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
+#else
 	if (ctx->use_decorations) {
 		SDL_SetRenderDrawColor(renderer, ctx->window_bg_color.r, ctx->window_bg_color.g,
 							   ctx->window_bg_color.b, ctx->window_bg_color.a);
 	} else {
 		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 	}
+#endif
+
 	SDL_RenderClear(renderer);
 
 	SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);

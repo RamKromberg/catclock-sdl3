@@ -40,7 +40,6 @@ static struct tm* _X64_or_X86_struct_tm_fallback(const time_t* timer) {
 
 CatClock_AppContext ctx = { 0 };
 
-int ssaa_factor = 2;
 int target_fps_limit = 30;
 
 /**

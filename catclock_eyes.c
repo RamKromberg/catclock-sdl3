@@ -113,7 +113,11 @@ void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
 	int total_cycle_frames = total_fps_frames * 2;
 
-	float phase_ratio = (float) (frame_idx % total_cycle_frames) / (float) total_cycle_frames;
+	/* --- ENHANCED PUPIL TIMELINE CORRECTION --- */
+	// Offset the discrete integer index to the temporal center (+0.5f) of the slice.
+	// This distributes the horizontal sine increments symmetrically across the pre-baked atlas
+	// cells.
+	float phase_ratio = ((float) frame_idx + 0.5f) / (float) total_cycle_frames;
 	float swing_angle = phase_ratio * 2.0f * (float) M_PI;
 	float horizontal_look = sinf(swing_angle);
 
@@ -138,14 +142,14 @@ void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float mask_dst_x = base_pad_x * scale;
 	float mask_dst_y = base_pad_y * scale;
 
-	/* --- STEP 1: INITIALIZE CANVAS WITH TRANSPARENT BACKDROPS --- */
-	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+	// STEP 1: INITIALIZE CANVAS WITH TRANSPARENT BACKDROPS
+	SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "eyes"), SDL_BLENDMODE_NONE);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 	SDL_FRect transparent_bounds = { 0.0f, 0.0f, roundf(64.0f * scale), roundf(32.0f * scale) };
 	SDL_RenderFillRect(renderer, &transparent_bounds);
 
-	/* --- STEP 2: DRAW OUTWARD-ONLY INDEPENDENT GUARD RECTANGLES --- */
-	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+	// STEP 2: DRAW OUTWARD-ONLY INDEPENDENT GUARD RECTANGLES
+	SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "eyes"), SDL_BLENDMODE_BLEND);
 	SDL_SetRenderDrawColor(renderer, active_cat_color.r, active_cat_color.g, active_cat_color.b,
 						   255);
 
@@ -157,7 +161,7 @@ void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	SDL_RenderFillRect(renderer, &left_guard_rect);
 	SDL_RenderFillRect(renderer, &right_guard_rect);
 
-	/* --- STEP 3: DRAW SOLID SCLERA PRIMITIVE RECTANGLES --- */
+	// STEP 3: DRAW SOLID SCLERA PRIMITIVE RECTANGLES
 	SDL_SetRenderDrawColor(renderer, active_sclera_color.r, active_sclera_color.g,
 						   active_sclera_color.b, 255);
 
@@ -168,13 +172,13 @@ void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	SDL_RenderFillRect(renderer, &left_sclera_rect);
 	SDL_RenderFillRect(renderer, &right_sclera_rect);
 
-	/* --- STEP 4: DRAW DUAL MOVING PUPILS --- */
+	// STEP 4: DRAW DUAL MOVING PUPILS
 	LocalDrawHardwarePupilOval(renderer, left_eye_cx, true_center_y, base_w, base_h,
 							   horizontal_look, max_offset_x, scale, active_pupil_color);
 	LocalDrawHardwarePupilOval(renderer, right_eye_cx, true_center_y, base_w, base_h,
 							   horizontal_look, max_offset_x, scale, active_pupil_color);
 
-	/* --- STEP 5: STAMP ALPHA FACEPLATE OVERLAY LAST --- */
+	// STEP 5: STAMP ALPHA FACEPLATE OVERLAY LAST
 	if (ctx.xbm_lib) {
 		SDL_Texture* mask_tex = CatClock_GetXbmTextureLayer(ctx.xbm_lib, "eyes");
 		if (mask_tex) {

@@ -75,7 +75,6 @@ typedef struct {
 typedef struct {
 	int current_win_w;
 	int current_win_h;
-	int current_ssaa_factor;
 	float current_scale;
 	Uint64 current_frame_step;
 	bool is_window_minimized;
@@ -139,7 +138,6 @@ typedef struct {
 
 /* CRITICAL LINK FIX: Broaden visibility context scope to global compiler translation units */
 extern CatClock_AppContext ctx;
-extern int ssaa_factor;
 extern int target_fps_limit;
 
 int CompareFloats(const void* a, const void* b);

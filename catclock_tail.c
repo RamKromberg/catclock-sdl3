@@ -25,6 +25,7 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 						 void* userdata) {
 	(void) cell_h;
 	(void) scale;
+
 	CatClock_TailShaderArgs* args = (CatClock_TailShaderArgs*) userdata;
 
 	// Use hard layout offsets passed from the atlas loop for the halo presentation
@@ -35,16 +36,13 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	SDL_FColor draw_color;
 
 	if (is_halo) {
-		/* Keep white halo outline pixels uniform */
 		draw_color = (SDL_FColor) { 1.0f, 1.0f, 1.0f, 1.0f };
 	} else if (args && args->app_ctx) {
-		/* Map the user's custom command-line cat theme colors dynamically */
 		draw_color = (SDL_FColor) { args->app_ctx->cat_color.r / 255.0f,
 									args->app_ctx->cat_color.g / 255.0f,
 									args->app_ctx->cat_color.b / 255.0f,
 									args->app_ctx->cat_color.a / 255.0f };
 	} else {
-		/* Standard legacy default fallback to black */
 		draw_color = (SDL_FColor) { 0.0f, 0.0f, 0.0f, 1.0f };
 	}
 	SDL_FPoint zero_uv = { 0.0f, 0.0f };
@@ -52,7 +50,10 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
 	float total_cycle_frames = (float) (total_fps_frames * 2);
 
-	float progress = (float) frame_idx / total_cycle_frames;
+	/* --- ENHANCED INDEPENDENT TIMELINE CORRECTION --- */
+	// Add a half-step offset (0.5f) to shift the static phase interval.
+	// This removes the rounding error inherent to discrete frame index steps.
+	float progress = ((float) frame_idx + 0.5f) / total_cycle_frames;
 	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
 
@@ -65,17 +66,14 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float cos_a = cosf(rad);
 	float sin_a = sinf(rad);
 
-	// Unified base tracking metrics tied directly to asset ratios
+	// -------------------------------------------------------------
+	// Rest of your pristine mesh generator logic remains unchanged
+	// -------------------------------------------------------------
 	float internal_unit_ratio = (float) cell_w / 96.0f;
-
-	// Symmetrically aligned pivot matching the core clock body depth perfectly
 	float pivot_x = ((float) cell_w / 2.0f) - (1.0f * internal_unit_ratio) + shift_x;
 	float pivot_y = (12.0f * internal_unit_ratio) + shift_y;
 
-	// FIX: Inject horizontal padding only to keep the X-axis flanks clean at 1x scale
 	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;
-
-	// Apply padding exclusively to widths; keep curves and radii pristine to prevent bloat
 	float half_width = (6.5f * internal_unit_ratio) + horizontal_cushion;
 	float outer_radius = 16.5f * internal_unit_ratio;
 	float inner_radius = 3.5f * internal_unit_ratio;
@@ -84,7 +82,6 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float stem_end_y = 62.0f * internal_unit_ratio;
 	float capsule_length_stretch = 6.5f * internal_unit_ratio;
 
-	// Adjust the horizontal center calculation to match the padded width parameters
 	float loop_center_x = (outer_radius + horizontal_cushion) - half_width;
 	float loop_center_y = stem_end_y;
 
@@ -197,9 +194,9 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 
 	for (int i = 0; i < CAP_SEGMENTS; i++) {
 		float t = (float) i / (float) (CAP_SEGMENTS - 1);
-		float cap_rad = t * (float) M_PI;
-		float cx = cap_center_x + cap_radius * cosf(cap_rad);
-		float cy = cap_center_y - cap_radius * sinf(cap_rad);
+		float cap_arc_rad = t * (float) M_PI;
+		float cx = cap_center_x + cap_radius * cosf(cap_arc_rad);
+		float cy = cap_center_y - cap_radius * sinf(cap_arc_rad);
 		PUSH_VTX(cx, cy);
 	}
 
@@ -207,8 +204,14 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 		PUSH_TRI(cap_center, cap_arc_start + i, cap_arc_start + i + 1);
 	}
 
-	// Lock to standard solid rendering modes (emulates classic 1-bit bitmap styling)
-	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+	if (is_halo) {
+		SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "catback"),
+								SDL_BLENDMODE_BLEND);
+	} else {
+		SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "catback"),
+								SDL_BLENDMODE_NONE);
+	}
+
 	SDL_RenderGeometry(renderer, NULL, vertices, v_idx, indices, i_idx);
 
 	SDL_free(indices);

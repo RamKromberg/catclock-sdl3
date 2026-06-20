@@ -27,7 +27,8 @@
  * Returns a valid SDL_Texture pointer on success, or NULL on failure.
  */
 static inline SDL_Texture* XbmUtil_LoadToRGBA4444(SDL_Renderer* renderer, const char* filepath,
-												  SDL_Color color, bool invert_mask) {
+												  SDL_Color color, bool invert_mask,
+												  bool as_color_mask) {
 	if (!renderer || !filepath)
 		return NULL;
 
@@ -113,11 +114,32 @@ static inline SDL_Texture* XbmUtil_LoadToRGBA4444(SDL_Renderer* renderer, const 
 				bit_active = !bit_active;
 			}
 
-			if (bit_active) {
-				staging_pixels[idx] = (((color.r >> 4) & 0x0F) << 12)
-					| (((color.g >> 4) & 0x0F) << 8) | (((color.b >> 4) & 0x0F) << 4) | 0x000F;
+			if (as_color_mask) {
+				// ============================================================
+				// SYSTEM 1: THE TIE COLOR MASK
+				// ============================================================
+				if (bit_active) {
+					// Active Fabric Shape: Turn on every color channel to make it solid white.
+					staging_pixels[idx] = 0xFFFF;
+				} else {
+					// Folds & Outside Corners: Turn off all channels to make it pure clear space.
+					staging_pixels[idx] = 0x0000;
+				}
 			} else {
-				staging_pixels[idx] = 0x0000;
+				// ============================================================
+				// SYSTEM 2: STANDARD BACKGROUND TRANSPARENCY
+				// ============================================================
+				if (bit_active) {
+					// Pack the default color channels natively for body assets
+					Uint16 r_channel = ((color.r >> 4) & 0x0F) << 12;
+					Uint16 g_channel = ((color.g >> 4) & 0x0F) << 8;
+					Uint16 b_channel = ((color.b >> 4) & 0x0F) << 4;
+					Uint16 a_channel = 0x000F; // Solid Alpha
+
+					staging_pixels[idx] = r_channel | g_channel | b_channel | a_channel;
+				} else {
+					staging_pixels[idx] = 0x0000; // Empty clear space
+				}
 			}
 		}
 	}

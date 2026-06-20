@@ -36,11 +36,11 @@ struct CatClock_XbmLibrary {
 };
 
 static void InitAssetNode(SDL_Renderer* renderer, AssetNode* node, const char* filepath,
-						  const char* name, SDL_Color color, bool invert) {
+						  const char* name, SDL_Color color, bool invert, bool as_color_mask) {
 	if (!node || !filepath || !name)
 		return;
-
-	node->texture = XbmUtil_LoadToRGBA4444(renderer, filepath, color, invert);
+	// Forward the flag cleanly to the updated inline header utility function
+	node->texture = XbmUtil_LoadToRGBA4444(renderer, filepath, color, invert, as_color_mask);
 	if (node->texture) {
 		float w, h;
 		SDL_GetTextureSize(node->texture, &w, &h);
@@ -58,11 +58,14 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 	SDL_Color color_base = { 255, 255, 255, 255 };
 
 	InitAssetNode(renderer, &lib->catbackground, "./assets/catback.xbm", "catback", color_base,
-				  false);
+				  false, false);
 	InitAssetNode(renderer, &lib->catoutline, "./assets/catwhite.xbm", "catwhite", color_base,
-				  false);
-	InitAssetNode(renderer, &lib->necktie, "./assets/cattie.xbm", "cattie", ctx.tie_color, false);
-	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, false);
+				  false, false);
+
+	InitAssetNode(renderer, &lib->necktie, "./assets/cattie.xbm", "cattie", ctx.tie_color, false,
+				  true);
+
+	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, false, false);
 
 	return lib;
 }
@@ -84,9 +87,6 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 		target = &lib->eyesocket;
 
 	if (target && target->texture) {
-		SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
-		SDL_SetTextureAlphaMod(target->texture, color.a);
-
 		SDL_FRect dst;
 		float runtime_scale = ctx.current_scale;
 
@@ -95,14 +95,46 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 			dst.y = floorf((16.0f + offset_y) * runtime_scale);
 			dst.w = (float) target->w * runtime_scale;
 			dst.h = (float) target->h * runtime_scale;
+
+			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
+			SDL_SetTextureAlphaMod(target->texture, color.a);
+			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
+		} else if (SDL_strcmp(layer_id, "cattie") == 0) {
+			// Establish rendering bounds matching the necktie dimension metrics
+			dst.x = floorf((9.0f + offset_x) * runtime_scale);
+			dst.y = floorf((75.0f + offset_y) * runtime_scale);
+			dst.w = (float) target->w * runtime_scale;
+			dst.h = (float) target->h * runtime_scale;
+
+			// PASS 1: Blit the background cat body slice first
+			if (lib->catbackground.texture) {
+				SDL_FRect back_src = { 9.0f, 75.0f, (float) target->w, (float) target->h };
+
+				SDL_SetTextureColorMod(lib->catbackground.texture, ctx.cat_color.r, ctx.cat_color.g,
+									   ctx.cat_color.b);
+				SDL_SetTextureAlphaMod(lib->catbackground.texture, 255);
+				SDL_SetTextureBlendMode(lib->catbackground.texture, SDL_BLENDMODE_BLEND);
+				SDL_RenderTexture(renderer, lib->catbackground.texture, &back_src, &dst);
+			}
+
+			// PASS 2: Tint selection using standard alpha blending
+			// Instead of standard modulation over transparency, use standard source alpha blending
+			// This forces transparent pixels (0x0000) to safely discard color values on the edges
+			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
+			SDL_SetTextureAlphaMod(target->texture, color.a);
+			SDL_SetTextureBlendMode(target->texture, SDL_BLENDMODE_BLEND);
+			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
+			return;
 		} else {
 			dst.x = floorf(offset_x * runtime_scale);
 			dst.y = floorf(offset_y * runtime_scale);
-			/* Always render the actual underlying physical cropped texture bounds */
-			dst.w = BASELINE_CANVAS_W * runtime_scale;
-			dst.h = BASELINE_CANVAS_H * runtime_scale;
+			dst.w = ceilf(BASELINE_CANVAS_W * runtime_scale);
+			dst.h = ceilf(BASELINE_CANVAS_H * runtime_scale);
+
+			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
+			SDL_SetTextureAlphaMod(target->texture, color.a);
+			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
 		}
-		SDL_RenderTexture(renderer, target->texture, NULL, &dst);
 	}
 }
 
