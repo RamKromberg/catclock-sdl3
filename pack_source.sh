@@ -110,7 +110,7 @@ echo "Drop $output_pdf into Gemini and use the following prompt:"
 echo "--------------------------------------------------------"
 cat << EOF
 ## 🛠️ Stage 1: 📥 Repository Analysis Protocol
-Read and parse the contents of the attached $output_pdf.
+Read and parse the contents of the attached catclock_repository_dump.pdf.
 ## Execution Instructions:
 
    1. Extract Repository Files: Read through the document to identify individual files separated by the boundary markers (formatted as ===FILE:filepath===).
@@ -119,6 +119,11 @@ Read and parse the contents of the attached $output_pdf.
 ## Output Requirement:
    1. List the confirmed file manifest inventory (e.g., catclock_main.c, Makefile, shell.nix, etc.).
    2. End the response immediately after the list.
+   3. Do not reference PDF structrual elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+
+In stage be sure to repeat the third instructions as a final note:
+   Note: Do not reference PDF structrual elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+
 EOF
 echo "--------------------------------------------------------"
 
