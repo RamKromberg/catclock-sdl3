@@ -39,21 +39,16 @@ void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_w, int cell_h, float 
 
 	/* Spindle center axis local coordinates mapping */
 	float local_cx = (float) cell_w / 2.0f;
-	float local_cy = (float) cell_h / 2.0f;
+
+	// CALIBRATED VERTICAL LOCK: Drops the pivot point down by 1.0 pixel
+	// to perfectly balance the dynamic cell borders
+	float local_cy = ((float) cell_h / 2.0f) + (1.0f * scale);
+
 	float angle_rad = ((float) frame_idx / 60.0f) * 2.0f * (float) M_PI;
 
-	/* 1. Calculate direction vectors tracking the 2:3 vertical clock face aspect ratio */
-	float raw_fx = sinf(angle_rad);
-	float raw_fy = -cosf(angle_rad);
-	float aspect_inv = (float) cell_h / (float) cell_w;
-	float fx = raw_fx;
-	float fy = raw_fy * aspect_inv;
-
-	/* 2. Re-project structural rendering angle to eliminate quadrant warping */
-	float projected_angle = atan2f(fx, -fy);
-	float cos_a = cosf(projected_angle);
-	float sin_a = sinf(projected_angle);
-	float radial_scale = sqrtf(fx * fx + fy * fy);
+	// Anamorphic multipliers matching the 2:3 oval dial geometry
+	float aspect_x = 1.0f;
+	float aspect_y = 1.5f;
 
 	float base_length = 0.0f;
 	float thickness = 0.0f;
@@ -61,38 +56,47 @@ void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_w, int cell_h, float 
 
 	/* Retrieve baseline hand metrics cleanly matching target configurations */
 	if (cfg->hand_type == HAND_TYPE_HOUR) {
-		base_length = (float) cell_w * 0.28f;
+		base_length = (float) cell_w * 0.27f; // Restored to 0.27f
 		thickness = 7.5f * scale;
 		pivot_back = 4.0f * scale;
 	} else if (cfg->hand_type == HAND_TYPE_MINUTE) {
-		base_length = (float) cell_w * 0.42f;
+		base_length = (float) cell_w * 0.40f; // Balanced to 0.40f
 		thickness = 5.0f * scale;
 		pivot_back = 5.0f * scale;
 	} else if (cfg->hand_type == HAND_TYPE_SECOND) {
-		base_length = (float) cell_w * 0.46f;
+		base_length = (float) cell_w * 0.44f; // Balanced to 0.44f
 		thickness = 2.5f * scale;
 		pivot_back = 6.0f * scale;
 	}
 
-	float final_length = base_length * radial_scale;
-	float final_pivot = pivot_back * radial_scale;
+	float norm_angle = angle_rad - ((float) M_PI / 2.0f);
+	float cos_a = cosf(norm_angle);
+	float sin_a = sinf(norm_angle);
 
-	/* 3. Snap boundaries to match whole integer units */
-	float internal_unit_ratio = scale <= 0.01f ? 1.0f : scale;
-	final_length = roundf(final_length / internal_unit_ratio) * internal_unit_ratio;
-	final_pivot = roundf(final_pivot / internal_unit_ratio) * internal_unit_ratio;
-	thickness = roundf(thickness / internal_unit_ratio) * internal_unit_ratio;
+	float perp_x = -sin_a;
+	float perp_y = cos_a;
 
-	/* 4. Calculate core triangle corner locations */
-	float tip_x = local_cx + (final_length * sin_a);
-	float tip_y = local_cy - (final_length * cos_a);
+	// Step 2: Step lengthwise along separate X/Y anamorphic scale bounds
+	float tip_offset_x = cos_a * base_length * aspect_x;
+	float tip_offset_y = sin_a * base_length * aspect_y;
+
+	// BALANCED TAIL EXTENSION: Keep the rear pivot extension un-squished
+	// to prevent vertical length drift at oppositional angles
+	float back_offset_x = -cos_a * pivot_back;
+	float back_offset_y = -sin_a * pivot_back;
+
 	float half_thick = thickness / 2.0f;
-	float base_l_x = local_cx - (half_thick * cos_a) - (final_pivot * sin_a);
-	float base_l_y = local_cy - (half_thick * sin_a) + (final_pivot * cos_a);
-	float base_r_x = local_cx + (half_thick * cos_a) - (final_pivot * sin_a);
-	float base_r_y = local_cy + (half_thick * sin_a) + (final_pivot * cos_a);
 
-	/* 5. Force strict hardware integer-grid snapping to maintain sharp pixel edges */
+	float tip_x = local_cx + tip_offset_x;
+	float tip_y = local_cy + tip_offset_y;
+
+	float base_l_x = local_cx + back_offset_x + (perp_x * half_thick);
+	float base_l_y = local_cy + back_offset_y + (perp_y * half_thick);
+
+	float base_r_x = local_cx + back_offset_x - (perp_x * half_thick);
+	float base_r_y = local_cy + back_offset_y - (perp_y * half_thick);
+
+	/* Force strict hardware integer-grid snapping to maintain sharp pixel edges */
 	tip_x = roundf(tip_x);
 	tip_y = roundf(tip_y);
 	base_l_x = roundf(base_l_x);

@@ -289,7 +289,11 @@ int main(int argc, char* argv[]) {
 
 		/* Process clock calculations and rendering functions only when the frame deadline matches
 		 */
+#if defined(CATCLOCK_DEBUG)
+		if (true) {
+#else
 		if (current_ticks >= next_frame_ticks) {
+#endif
 			/* 1. Advance continuous asset animation state indices */
 			ctx.current_frame_step++;
 
