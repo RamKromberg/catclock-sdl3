@@ -48,6 +48,17 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
 	}
 }
 
+static void CommitBufferToSDL(SDL_Renderer* renderer, SDL_Surface* staging_surf,
+							  CatClock_ComputeAtlas* atlas) {
+	// Terminal translation translation pass converting intermediate staging RAM layout directly
+	// into VRAM
+	atlas->texture = SDL_CreateTextureFromSurface(renderer, staging_surf);
+	if (atlas->texture) {
+		SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
+		SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
+	}
+}
+
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
 								 CatClock_ShaderCallback shader, void* userdata) {
@@ -90,6 +101,7 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	int atlas_w = cols * atlas->cell_w;
 	int atlas_h = rows * atlas->cell_h;
 
+	// Sticking to 16-bit format to ensure perfect texture alpha blending and pixel art downscaling
 	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444, SDL_TEXTUREACCESS_TARGET,
 									   atlas_w, atlas_h);
 	if (!atlas->texture) {
@@ -100,18 +112,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 
 	SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
-
-	/* Pre-bake dynamic colors straight into VRAM atlas textures during initialization */
-	if (atlas == &ctx.hands_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.hour_color.r, ctx.hour_color.g,
-							   ctx.hour_color.b);
-	} else if (atlas == &ctx.minutes_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.minute_color.r, ctx.minute_color.g,
-							   ctx.minute_color.b);
-	} else if (atlas == &ctx.seconds_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.second_color.r, ctx.second_color.g,
-							   ctx.second_color.b);
-	}
 
 	SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
 	SDL_SetRenderTarget(renderer, atlas->texture);
@@ -142,6 +142,17 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 
 	SDL_SetRenderViewport(renderer, NULL);
 	SDL_SetRenderTarget(renderer, old_target);
+
+	if (atlas == &ctx.hands_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.hour_color.r, ctx.hour_color.g,
+							   ctx.hour_color.b);
+	} else if (atlas == &ctx.minutes_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.minute_color.r, ctx.minute_color.g,
+							   ctx.minute_color.b);
+	} else if (atlas == &ctx.seconds_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, ctx.second_color.r, ctx.second_color.g,
+							   ctx.second_color.b);
+	}
 }
 
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
@@ -177,35 +188,16 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h,
 	}
 }
 
-/*
-Dumps Frames.
-USE:
-CMD='make clean && make CFLAGS="-Wall -Wextra -O2 -DCATCLOCK_DEBUG" \
-&& ./catclock-sdl3'; clear && echo -e "\e[32m$\e[0m $CMD" && eval "$CMD"
-*/
-#ifdef CATCLOCK_DEBUG
-void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
+#ifdef CATCLOCK_SHOT
+// Clean duplication of the diagnostic dumper stripped of real-time wall-clock uptime limits
+void CatClock_DiagnosticShotDump(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
 	if (!renderer || !atlas)
 		return;
 
-	int output_w = 0, output_h = 0;
-	SDL_GetRenderOutputSize(renderer, &output_w, &output_h);
-	float active_runtime_scale = atlas->last_scale;
-
-	static Uint64 startup_initialization_timestamp = 0;
-	if (startup_initialization_timestamp == 0) {
-		startup_initialization_timestamp = SDL_GetTicks();
-		return;
-	}
-
-	Uint64 elapsed_execution_time = SDL_GetTicks() - startup_initialization_timestamp;
-	if (elapsed_execution_time < 3000) {
-		return;
-	}
-
 	static int multi_frame_sequence_counter = 0;
 
-	if (multi_frame_sequence_counter >= 60 && multi_frame_sequence_counter <= 120) {
+	// Unconditionally evaluate frame counts and capture exactly on frame index tick 60
+	if (multi_frame_sequence_counter == 60) {
 		SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
 		SDL_SetRenderTarget(renderer, NULL);
 
@@ -214,12 +206,10 @@ void CatClock_DiagnosticDumpTailAtlas(SDL_Renderer* renderer, CatClock_ComputeAt
 			SDL_Surface* final_rgba = SDL_ConvertSurface(screen_surf, SDL_PIXELFORMAT_RGBA8888);
 			if (final_rgba) {
 				char filename_buffer[256];
-				snprintf(filename_buffer, sizeof(filename_buffer),
-						 "catclock_scale%0.2f_frame_%d.png", active_runtime_scale,
-						 multi_frame_sequence_counter);
+				snprintf(filename_buffer, sizeof(filename_buffer), "catclock_shot_target_raw.png");
 
 				SDL_SavePNG(final_rgba, filename_buffer);
-				SDL_Log("=== DIAGNOSTIC EXPORT: STABILIZED CYCLE 2 SEQUENCE WRITTEN -> %s ===",
+				SDL_Log("=== [SHOT ENGINE] SINGLE-FRAME PERSPECTIVE CAPTURED -> %s ===",
 						filename_buffer);
 				SDL_DestroySurface(final_rgba);
 			}
@@ -505,9 +495,15 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 						  "SHUFFLE_CLOCK_HANDS");
 #endif
 
-#ifdef CATCLOCK_DEBUG
+#ifdef CATCLOCK_SHOT
 	if (ctx->tail_atlas.texture) {
-		CatClock_DiagnosticDumpTailAtlas(renderer, &ctx->tail_atlas);
+		CatClock_DiagnosticShotDump(renderer, &ctx->tail_atlas);
+	}
+#endif
+
+#ifdef CATCLOCK_SHOT
+	if (ctx->tail_atlas.texture) {
+		CatClock_DiagnosticShotDump(renderer, &ctx->tail_atlas);
 	}
 #endif
 

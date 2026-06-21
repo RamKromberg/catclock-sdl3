@@ -289,10 +289,12 @@ int main(int argc, char* argv[]) {
 
 		/* Process clock calculations and rendering functions only when the frame deadline matches
 		 */
-#if defined(CATCLOCK_DEBUG)
-		if (true) {
-#else
+#if !defined(CATCLOCK_SHOT) && !defined(CATCLOCK_DEBUG)
 		if (current_ticks >= next_frame_ticks) {
+#else
+		/* Under simulation testing, advance frames unconditionally independent of frozen hardware
+		 * clocks */
+		if (1) {
 #endif
 			/* 1. Advance continuous asset animation state indices */
 			ctx.current_frame_step++;
@@ -328,6 +330,46 @@ int main(int argc, char* argv[]) {
 					SDL_RenderTexture(renderer, ctx.master_composite_layer, NULL, &display_rect);
 				}
 				SDL_RenderPresent(renderer);
+/*
+Dumps Frames.
+USE:
+CMD='make clean && make CFLAGS="-Wall -Wextra -O2 -DCATCLOCK_DEBUG -DCATCLOCK_CHROMA" &&
+./catclock-sdl3 -scale 2.0'; clear && echo -e "\e[32m$\e[0m $CMD" && eval "$CMD" W=$(identify
+-format "%w" catclock_live_frame_60.png); montage -geometry "${W}x+4+4" -tile 10x7 $(ls
+catclock_live_frame_*.png | sort -V) unified_live_grid.png rm catclock_live_frame_*.png
+*/
+#ifdef CATCLOCK_DEBUG
+				// Isolated diagnostic block evaluating directly on the presentation backbuffer
+				static int live_loop_sequence_counter = 0;
+
+				if (live_loop_sequence_counter >= 60 && live_loop_sequence_counter <= 120) {
+					SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
+					SDL_SetRenderTarget(renderer, NULL);
+
+					SDL_Surface* screen_surf = SDL_RenderReadPixels(renderer, NULL);
+					if (screen_surf) {
+						SDL_Surface* final_rgba
+							= SDL_ConvertSurface(screen_surf, SDL_PIXELFORMAT_RGBA32);
+						if (final_rgba) {
+							char filename_buffer[256];
+							SDL_snprintf(filename_buffer, sizeof(filename_buffer),
+										 "catclock_live_frame_%d.png", live_loop_sequence_counter);
+
+							if (SDL_SavePNG(final_rgba, filename_buffer)) {
+								SDL_Log("=== [MAIN DIAG] SUCCESS -> Wrote image file: %s ===",
+										filename_buffer);
+							}
+							SDL_DestroySurface(final_rgba);
+						}
+						SDL_DestroySurface(screen_surf);
+					}
+					SDL_SetRenderTarget(renderer, old_target);
+
+					// DELAY COOLDOWN: Gives the file system 50ms to finish writing to disk
+					SDL_Delay(100);
+				}
+				live_loop_sequence_counter++;
+#endif
 			}
 
 			/* Advance target timeline step cleanly */
@@ -341,7 +383,12 @@ int main(int argc, char* argv[]) {
 			Uint64 remaining_ticks = next_frame_ticks - current_ticks;
 			Uint64 sleep_ns = (remaining_ticks * 1000000000ULL) / SDL_GetPerformanceFrequency();
 			if (sleep_ns > 0) {
+#if !defined(CATCLOCK_SHOT) && !defined(CATCLOCK_DEBUG)
 				SDL_DelayNS(sleep_ns);
+#else
+				/* Prevent frozen time-deficit spinlocks from freezing application startup frames */
+				(void) sleep_ns;
+#endif
 			}
 		}
 	}

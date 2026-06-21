@@ -14,106 +14,149 @@
  * License: Open Source / Educational - Preserve attribution upon redistribution.
  *****************************************************************************/
 
-// clang-format off
 #include "catclock_shared.h"
-#include "catclock_atlas.h"
-// clang-format on
 #include <math.h>
-#include <stdlib.h>
 
-/* Match the private layout from catclock_atlas.c to guarantee memory alignment */
-typedef struct {
-	int hand_type;
-	SDL_Color color;
-} HandShaderConfig;
-
-/**
- * Renders a single clock hand frame using grid-snapped, sharp triangle geometry.
- * Bakes mask templates as a white layer to allow runtime GPU tinting.
- */
 void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 						  int frame_idx, void* userdata) {
-	HandShaderConfig* cfg = (HandShaderConfig*) userdata;
-	if (!cfg)
-		return;
+	(void) scale;
 
-	/* Spindle center axis local coordinates mapping */
-	float local_cx = (float) cell_w / 2.0f;
+	int hand_type = 0;
+	if (userdata) {
+		hand_type = *(int*) userdata;
+	}
 
-	// CALIBRATED VERTICAL LOCK: Drops the pivot point down by 1.0 pixel
-	// to perfectly balance the dynamic cell borders
-	float local_cy = ((float) cell_h / 2.0f) + (1.0f * scale);
+	int phase = frame_idx % TOTAL_PHASES;
+	float angle_rad
+		= ((float) phase / (float) TOTAL_PHASES) * 2.0f * (float) M_PI - ((float) M_PI / 2.0f);
 
-	float angle_rad = ((float) frame_idx / 60.0f) * 2.0f * (float) M_PI;
+	// COMPENSATED POSITIONING RESOLUTION: Shifting the center left by 1 pixel
+	// to cancel out the floorf() truncation bug in the blit destination pass
+	float center_x = ((float) cell_w / 2.0f) - (1.0f * scale);
+	float center_y = (float) cell_h / 2.0f;
 
-	// Anamorphic multipliers matching the 2:3 oval dial geometry
+	// True anamorphic aspect ratio matching the 2:3 oval dial geometry bounds
 	float aspect_x = 1.0f;
 	float aspect_y = 1.5f;
 
-	float base_length = 0.0f;
-	float thickness = 0.0f;
-	float pivot_back = 0.0f;
+	int max_vertices = 16;
+	int max_indices = 32;
+	CatClock_GpuVertex* gpu_vertices
+		= (CatClock_GpuVertex*) SDL_malloc(sizeof(CatClock_GpuVertex) * max_vertices);
+	int* indices = (int*) SDL_malloc(sizeof(int) * max_indices);
 
-	/* Retrieve baseline hand metrics cleanly matching target configurations */
-	if (cfg->hand_type == HAND_TYPE_HOUR) {
-		base_length = (float) cell_w * 0.27f; // Restored to 0.27f
-		thickness = 7.5f * scale;
-		pivot_back = 4.0f * scale;
-	} else if (cfg->hand_type == HAND_TYPE_MINUTE) {
-		base_length = (float) cell_w * 0.40f; // Balanced to 0.40f
-		thickness = 5.0f * scale;
-		pivot_back = 5.0f * scale;
-	} else if (cfg->hand_type == HAND_TYPE_SECOND) {
-		base_length = (float) cell_w * 0.44f; // Balanced to 0.44f
-		thickness = 2.5f * scale;
-		pivot_back = 6.0f * scale;
+	if (!gpu_vertices || !indices) {
+		if (gpu_vertices)
+			SDL_free(gpu_vertices);
+		if (indices)
+			SDL_free(indices);
+		return;
 	}
 
-	float norm_angle = angle_rad - ((float) M_PI / 2.0f);
-	float cos_a = cosf(norm_angle);
-	float sin_a = sinf(norm_angle);
+	int v_count = 0;
+	int i_count = 0;
+
+	// Establish dimensional properties per hand type
+	float base_half_width = 2.5f * scale;
+	float tip_length = ((float) cell_w < (float) cell_h ? (float) cell_w : (float) cell_h) * 0.38f;
+	float back_pivot_extension = 4.0f * scale;
+	SDL_Color current_color = ctx.hour_color;
+
+	if (hand_type == HAND_TYPE_MINUTE) {
+		current_color = ctx.minute_color;
+		base_half_width = 2.0f * scale;
+		tip_length = ((float) cell_w < (float) cell_h ? (float) cell_w : (float) cell_h) * 0.31f;
+		back_pivot_extension = 5.0f * scale;
+	} else if (hand_type == HAND_TYPE_SECOND) {
+		current_color = ctx.second_color;
+		base_half_width = 1.0f * scale;
+		tip_length = ((float) cell_w < (float) cell_h ? (float) cell_w : (float) cell_h) * 0.43f;
+		back_pivot_extension = 6.0f * scale;
+	} else {
+		current_color = ctx.hour_color;
+		base_half_width = 3.0f * scale;
+		tip_length = ((float) cell_w < (float) cell_h ? (float) cell_w : (float) cell_h) * 0.33f;
+		back_pivot_extension = 4.0f * scale;
+	}
+
+	float r_f = current_color.r / 255.0f;
+	float g_f = current_color.g / 255.0f;
+	float b_f = current_color.b / 255.0f;
+	float a_f = current_color.a / 255.0f;
+
+	if (base_half_width < 0.5f)
+		base_half_width = 0.5f;
+
+	float cos_a = cosf(angle_rad);
+	float sin_a = sinf(angle_rad);
 
 	float perp_x = -sin_a;
 	float perp_y = cos_a;
 
-	// Step 2: Step lengthwise along separate X/Y anamorphic scale bounds
-	float tip_offset_x = cos_a * base_length * aspect_x;
-	float tip_offset_y = sin_a * base_length * aspect_y;
+	float tip_x = center_x + (cos_a * tip_length * aspect_x);
+	float tip_y = center_y + (sin_a * tip_length * aspect_y);
 
-	// BALANCED TAIL EXTENSION: Keep the rear pivot extension un-squished
-	// to prevent vertical length drift at oppositional angles
-	float back_offset_x = -cos_a * pivot_back;
-	float back_offset_y = -sin_a * pivot_back;
+	float back_x = -cos_a * back_pivot_extension * aspect_x;
+	float back_y = -sin_a * back_pivot_extension * aspect_y;
 
-	float half_thick = thickness / 2.0f;
+	float base_l_x = center_x + back_x + (perp_x * base_half_width);
+	float base_l_y = center_y + back_y + (perp_y * base_half_width);
 
-	float tip_x = local_cx + tip_offset_x;
-	float tip_y = local_cy + tip_offset_y;
+	float base_r_x = center_x + back_x - (perp_x * base_half_width);
+	float base_r_y = center_y + back_y - (perp_y * base_half_width);
 
-	float base_l_x = local_cx + back_offset_x + (perp_x * half_thick);
-	float base_l_y = local_cy + back_offset_y + (perp_y * half_thick);
+	float global_alignment_offset_y = 0.0f * scale;
 
-	float base_r_x = local_cx + back_offset_x - (perp_x * half_thick);
-	float base_r_y = local_cy + back_offset_y - (perp_y * half_thick);
+	// Vertex 0: Tip (Fixed Array Dimensions)
+	gpu_vertices[v_count].position[0] = tip_x;
+	gpu_vertices[v_count].position[1] = tip_y + global_alignment_offset_y;
+	gpu_vertices[v_count].color[0] = r_f;
+	gpu_vertices[v_count].color[1] = g_f;
+	gpu_vertices[v_count].color[2] = b_f;
+	gpu_vertices[v_count].color[3] = a_f;
+	v_count++;
 
-	/* Force strict hardware integer-grid snapping to maintain sharp pixel edges */
-	tip_x = roundf(tip_x);
-	tip_y = roundf(tip_y);
-	base_l_x = roundf(base_l_x);
-	base_l_y = roundf(base_l_y);
-	base_r_x = roundf(base_r_x);
-	base_r_y = roundf(base_r_y);
+	// Vertex 1: Left Base
+	gpu_vertices[v_count].position[0] = base_l_x;
+	gpu_vertices[v_count].position[1] = base_l_y + global_alignment_offset_y;
+	gpu_vertices[v_count].color[0] = r_f;
+	gpu_vertices[v_count].color[1] = g_f;
+	gpu_vertices[v_count].color[2] = b_f;
+	gpu_vertices[v_count].color[3] = a_f;
+	v_count++;
 
-	/* 6. Hardware Color Setup - Bake template masks as flat white layers */
-	SDL_FColor fcol = { 1.0f, 1.0f, 1.0f, 1.0f };
-	SDL_FPoint zero_uv = { 0.0f, 0.0f };
+	// Vertex 2: Right Base
+	gpu_vertices[v_count].position[0] = base_r_x;
+	gpu_vertices[v_count].position[1] = base_r_y + global_alignment_offset_y;
+	gpu_vertices[v_count].color[0] = r_f;
+	gpu_vertices[v_count].color[1] = g_f;
+	gpu_vertices[v_count].color[2] = b_f;
+	gpu_vertices[v_count].color[3] = a_f;
+	v_count++;
 
-	/* FIX: Formulate explicitly as a 3-element struct layout array buffer */
-	SDL_Vertex verts[3] = { { { tip_x, tip_y }, fcol, zero_uv },
-							{ { base_l_x, base_l_y }, fcol, zero_uv },
-							{ { base_r_x, base_r_y }, fcol, zero_uv } };
+	// Fixed Pointer Element Dereferencing for Triangle Assignment
+	indices[0] = 0;
+	indices[1] = 1;
+	indices[2] = 2;
+	i_count = 3;
 
-	/* Maintain unblended sharp pixel art edges inside atlas cells */
-	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-	SDL_RenderGeometry(renderer, NULL, verts, 3, NULL, 0);
+	SDL_Vertex* sdl_vertices = (SDL_Vertex*) SDL_malloc(sizeof(SDL_Vertex) * v_count);
+	if (sdl_vertices) {
+		for (int v = 0; v < v_count; v++) {
+			sdl_vertices[v].position.x = gpu_vertices[v].position[0];
+			sdl_vertices[v].position.y = gpu_vertices[v].position[1];
+			sdl_vertices[v].color.r = (Uint8) (gpu_vertices[v].color[0] * 255.0f);
+			sdl_vertices[v].color.g = (Uint8) (gpu_vertices[v].color[1] * 255.0f);
+			sdl_vertices[v].color.b = (Uint8) (gpu_vertices[v].color[2] * 255.0f);
+			sdl_vertices[v].color.a = (Uint8) (gpu_vertices[v].color[3] * 255.0f);
+			sdl_vertices[v].tex_coord = (SDL_FPoint) { 0.0f, 0.0f };
+		}
+
+		SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+		SDL_RenderGeometry(renderer, NULL, sdl_vertices, v_count, indices, i_count);
+		SDL_free(sdl_vertices);
+	}
+
+	SDL_free(gpu_vertices);
+	SDL_free(indices);
 }

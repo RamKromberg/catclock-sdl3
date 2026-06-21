@@ -40,6 +40,24 @@
 #define HAND_TYPE_MINUTE 1
 #define HAND_TYPE_SECOND 2
 
+/* --- GPU-COMPATIBLE VERTEX DATA LAYOUT --- */
+typedef struct {
+	float position[2]; // x, y
+	float color[4]; // r, g, b, a
+} CatClock_GpuVertex;
+
+/* --- 16-BYTE ALIGNED UNIFORM STRUCT --- */
+typedef struct {
+	float current_scale;
+	float offset_x;
+	float offset_y;
+	float alignment_padding;
+	float cat_color[4];
+	float tie_color[4];
+	float pupil_color[4];
+	float sclera_color[4];
+} CatClock_RenderUniforms;
+
 typedef void (*CatClock_ShaderCallback)(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 										int frame_idx, void* userdata);
 
@@ -69,7 +87,6 @@ typedef struct {
 	Uint32 logging_frequency;
 } CatClock_TelemetryContext;
 #endif
-/* -------------------------------------------------- */
 
 // Unified App Context with Feature Restoration Flags
 typedef struct {
@@ -83,7 +100,7 @@ typedef struct {
 	SDL_Color bg_color;
 
 	// Decoupled Lifecycles for Sharp Multi-Color Blending
-	CatClock_ComputeAtlas hands_atlas;
+	CatClock_ComputeAtlas hands_atlas; // Restored to hands_atlas
 	CatClock_ComputeAtlas minutes_atlas;
 	CatClock_ComputeAtlas seconds_atlas;
 	CatClock_ComputeAtlas eyes_atlas;
@@ -123,10 +140,6 @@ typedef struct {
 #endif
 } CatClock_AppContext;
 
-// =================================================================
-// SYSTEM REFACTOR FIX: Structural Forward Pointer Package
-// Resolves structural circularity bindings natively across units
-// =================================================================
 struct CatClock_AppContext;
 
 typedef struct {
@@ -143,7 +156,6 @@ extern int target_fps_limit;
 int CompareFloats(const void* a, const void* b);
 void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* ctx,
 							 SDL_Renderer* renderer);
-
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase);
@@ -162,7 +174,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
 								 CatClock_ShaderCallback shader, void* userdata);
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
-
 void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 								 int frame_idx, void* userdata);
 
@@ -179,7 +190,6 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 						 void* userdata);
 
 #ifdef CATCLOCK_DIAGNOSTIC
-/* Swaps out the static pointer check for a live frame initialization step match */
 #define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \
 	do {                                                                                           \
 		if ((ctx_ptr)->current_frame_step % 60 == 0) {                                             \
@@ -187,7 +197,6 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 		}                                                                                          \
 	} while (0)
 #else
-/* Compiles out completely with zero machine-instruction overhead */
 #define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \
 	do {                                                                                           \
 	} while (0)

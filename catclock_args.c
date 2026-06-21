@@ -24,29 +24,36 @@
 
 void PrintHelpDocumentation(const char* program_name) {
 	printf("Kit-Cat Desktop Widget Clock (SDL3 Engine Re-Port)\n");
+	printf("https://github.com/RamKromberg/catclock-sdl3\n");
 	printf("Usage: %s [flags]\n\n", program_name);
 	printf("Available Flags:\n");
-	printf("  --help              Display this interface parameter map.\n");
-	printf("  -nosecorndsteps / -noseconds  Completely hide the sweeping second hand.\n");
-	printf("  -nooutline          Disable the form-fitting 1px white halo background.\n");
-	printf("  -decorations [hex]  Restore standard desktop borders & window title-bars with "
-		   "optional background color.\n");
-	printf("  -notop              Disable the forced 'Always on Top' window layer pinning.\n");
-	printf("  -fps [1-120]        Set a custom target frame rate pacing limit (Default: 30).\n");
+	printf("  --help                    Display this interface parameter map.\n");
 	printf(
-		"  -catcolor [hex]     Override default black cat body base layout (Default: 000000).\n");
-	printf("  -detailcolor [hex]  Override default white accents and sclera layout (Default: "
+		"  -notop                    Disable the forced 'Always on Top' window layer pinning.\n");
+	printf("  -noseconds                Completely hide the sweeping second hand.\n");
+	printf("  -nooutline                Disable the form-fitting 1px white halo background.\n");
+	printf(
+		"  -fps [1-120]              Set a custom target frame rate pacing limit (Default: 30).\n");
+	printf("  -scale [0.5,1.0,...,10.0] Set the initial scale multiplier (Default: 1.0).\n");
+	printf("  -decorations [hex]        Restore standard desktop borders & window title-bars "
+		   "(Default: FFFFFF).\n");
+	printf("  -catcolor [hex]           Override default black cat body base layout (Default: "
+		   "000000).\n");
+	printf("  -detailcolor [hex]        Override default white accents and sclera layout (Default: "
 		   "ffffff).\n");
-	printf("  -tiecolor [hex]     Override default necktie hex color channel (Default: fdfdfd).\n");
+	printf("  -tiecolor [hex]           Override default necktie hex color channel (Default: "
+		   "FFFFFF).\n");
+	printf("  -pupilcolor [hex]         Override moving eye pupil hex color channel (Default: "
+		   "000000).\n");
 	printf(
-		"  -pupilcolor [hex]   Override moving eye pupil hex color channel (Default: 000000).\n");
-	printf("  -hourcolor [hex]    Override default hour clock hand hex color (Default: 000000).\n");
-	printf(
-		"  -minutecolor [hex]  Override default minute clock hand hex color (Default: 000000).\n");
-	printf("  -secondcolor [hex]  Override default sweeping second hand hex color (Default: "
+		"  -scleracolor [hex]        Override static eye background socket color layout (Default: "
+		"ffffff).\n");
+	printf("  -hourscolor [hex]         Override default hour clock hand hex color (Default: "
+		   "000000).\n");
+	printf("  -minutescolor [hex]       Override default minute clock hand hex color (Default: "
+		   "000000).\n");
+	printf("  -secondscolor [hex]       Override default sweeping second hand hex color (Default: "
 		   "ff0000).\n");
-	printf("  -scleracolor [hex]  Override static eye background socket color layout (Default: "
-		   "ffffff).\n");
 }
 
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color) {
@@ -86,15 +93,21 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx)
 	ctx->current_scale = 1.0f;
 
 	ctx->hide_seconds = false;
-	ctx->disable_outline = false;
-	ctx->use_decorations = false;
-	ctx->disable_always_on_top = false;
 
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--help") == 0) {
 			PrintHelpDocumentation(argv[0]);
 			exit(0);
-		} else if (strcmp(argv[i], "-nosecorndsteps") == 0 || strcmp(argv[i], "-noseconds") == 0) {
+		} else if (strcmp(argv[i], "-scale") == 0) {
+			/* Parse custom initial widget rendering scale multiplier */
+			if ((i + 1) < argc) {
+				ctx->current_scale = (float) atof(argv[++i]);
+				if (ctx->current_scale < 0.5f)
+					ctx->current_scale = 0.5f;
+				if (ctx->current_scale > 10.0f)
+					ctx->current_scale = 10.0f;
+			}
+		} else if (strcmp(argv[i], "-noseconds") == 0) {
 			ctx->hide_seconds = true;
 		} else if (strcmp(argv[i], "-nooutline") == 0) {
 			ctx->disable_outline = true;
@@ -133,15 +146,15 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx)
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &ctx->pupil_color);
 			}
-		} else if (strcmp(argv[i], "-hourcolor") == 0) {
+		} else if (strcmp(argv[i], "-hourscolor") == 0) {
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &ctx->hour_color);
 			}
-		} else if (strcmp(argv[i], "-minutecolor") == 0) {
+		} else if (strcmp(argv[i], "-minutescolor") == 0) {
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &ctx->minute_color);
 			}
-		} else if (strcmp(argv[i], "-secondcolor") == 0) {
+		} else if (strcmp(argv[i], "-secondscolor") == 0) {
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &ctx->second_color);
 			}
@@ -151,9 +164,6 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx)
 				if (parsed_fps >= 1 && parsed_fps <= 120) {
 					target_fps_limit = parsed_fps;
 				}
-			} else {
-				PrintHelpDocumentation(argv[0]);
-				exit(1);
 			}
 		} else {
 			fprintf(stderr, "Unknown parameter layout flag detected: %s\n", argv[i]);

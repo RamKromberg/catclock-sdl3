@@ -69,6 +69,8 @@ void FreeClockHandsAtlases(void);
 void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 								 int frame_idx, void* userdata);
 
+void CatClock_DiagnosticShotDump(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas);
+
 /* Command-line subsystem processing links */
 void PrintHelpDocumentation(const char* program_name);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);

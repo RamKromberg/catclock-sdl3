@@ -2,7 +2,7 @@
 set -e
 
 output_pdf="catclock_repository_dump.pdf"
-file_targets="*.[ch] Makefile README.md shell.nix gen_cert.sh"
+file_targets="*.[ch] Makefile README.md shell.nix gen_cert.sh track.sh sweep_phases.sh"
 
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)
@@ -119,10 +119,10 @@ Read and parse the contents of the attached catclock_repository_dump.pdf.
 ## Output Requirement:
    1. List the confirmed file manifest inventory (e.g., catclock_main.c, Makefile, shell.nix, etc.).
    2. End the response immediately after the list.
-   3. Do not reference PDF structrual elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+   3. Do not reference PDF structural elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
 
 In stage be sure to repeat the third instructions as a final note:
-   Note: Do not reference PDF structrual elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+   Note: Do not reference PDF structural elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
 
 EOF
 echo "--------------------------------------------------------"
