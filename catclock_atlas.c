@@ -131,9 +131,16 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	int rows = (total_frames + cols - 1) / cols;
 	int atlas_w = cols * atlas->cell_w;
 	int atlas_h = rows * atlas->cell_h;
+	
+	atlas->index_buffer = (uint8_t*)SDL_calloc(1, atlas_w * atlas_h);
+	if (!atlas->index_buffer) {
+		SDL_free(atlas->src_rects);
+		atlas->src_rects = NULL;
+		return;
+	}
 
 	// Sticking to 16-bit format to ensure perfect texture alpha blending and pixel art downscaling
-	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444, SDL_TEXTUREACCESS_TARGET,
+	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444, SDL_TEXTUREACCESS_STREAMING,
 									   atlas_w, atlas_h);
 	if (!atlas->texture) {
 		SDL_free(atlas->src_rects);
@@ -143,11 +150,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 
 	SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
 	SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
-
-	SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
-	SDL_SetRenderTarget(renderer, atlas->texture);
-	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-	SDL_RenderClear(renderer);
 
 	for (int i = 0; i < total_frames; i++) {
 		int cell_x = (i % cols) * atlas->cell_w;
@@ -172,7 +174,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	}
 
 	SDL_SetRenderViewport(renderer, NULL);
-	SDL_SetRenderTarget(renderer, old_target);
 
 	// CRITICAL LIFE CYCLE HOOK: Invoke the translation bridge pass to synchronize colors cleanly
 	CommitBufferToSDL(renderer, atlas);
@@ -186,6 +187,10 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	if (atlas->src_rects) {
 		SDL_free(atlas->src_rects);
 		atlas->src_rects = NULL;
+	}
+	if (atlas->index_buffer) {
+		SDL_free(atlas->index_buffer);
+		atlas->index_buffer = NULL;
 	}
 	atlas->total_frames = 0;
 	atlas->cell_w = 0;
