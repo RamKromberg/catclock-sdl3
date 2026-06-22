@@ -48,14 +48,45 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
 	}
 }
 
-static void CommitBufferToSDL(SDL_Renderer* renderer, SDL_Surface* staging_surf,
-							  CatClock_ComputeAtlas* atlas) {
-	// Terminal translation translation pass converting intermediate staging RAM layout directly
-	// into VRAM
-	atlas->texture = SDL_CreateTextureFromSurface(renderer, staging_surf);
-	if (atlas->texture) {
-		SDL_SetTextureBlendMode(atlas->texture, SDL_BLENDMODE_BLEND);
-		SDL_SetTextureScaleMode(atlas->texture, SDL_SCALEMODE_NEAREST);
+/**
+ * CommitBufferToSDL (Refactoring Phase Stage 3 Bridge)
+ * Translates palette indices into 32-bit colors.
+ * Note: Temporarily implemented as a non-breaking pipeline shim
+ * to preserve complete application compilation.
+ */
+void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
+	if (!atlas || !atlas->texture) {
+		return;
+	}
+
+	(void) renderer; // Silence unused parameter warning safely
+
+	// Initialize with a default fallback color (Cat Body Color)
+	SDL_Color uniform_palette = ctx.cat_color;
+
+	// Check specific atlas identity bindings to synchronize hand and eye overrides cleanly
+	if (atlas == &ctx.hands_atlas) {
+		uniform_palette = ctx.hour_color;
+	} else if (atlas == &ctx.minutes_atlas) {
+		uniform_palette = ctx.minute_color;
+	} else if (atlas == &ctx.seconds_atlas) {
+		uniform_palette = ctx.second_color;
+	} else if (atlas == &ctx.tail_atlas) {
+		uniform_palette = ctx.cat_color; // Maps to -catcolor
+	}
+
+	// Apply color modulations safely to immediate hardware texture layers
+	if (atlas == &ctx.hands_atlas || atlas == &ctx.minutes_atlas || atlas == &ctx.seconds_atlas
+		|| atlas == &ctx.tail_atlas) {
+		SDL_SetTextureColorMod(atlas->texture, uniform_palette.r, uniform_palette.g,
+							   uniform_palette.b);
+		SDL_SetTextureAlphaMod(atlas->texture, uniform_palette.a);
+	} else if (atlas == &ctx.eyes_atlas) {
+		// BYPASS MODULATION: The eyes rely on internal procedural transparency masks.
+		// We restore original blending by resetting modulation to full white/opaque
+		// until the 8-bit palette buffer refactoring is implemented.
+		SDL_SetTextureColorMod(atlas->texture, 255, 255, 255);
+		SDL_SetTextureAlphaMod(atlas->texture, 255);
 	}
 }
 
@@ -143,16 +174,8 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	SDL_SetRenderViewport(renderer, NULL);
 	SDL_SetRenderTarget(renderer, old_target);
 
-	if (atlas == &ctx.hands_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.hour_color.r, ctx.hour_color.g,
-							   ctx.hour_color.b);
-	} else if (atlas == &ctx.minutes_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.minute_color.r, ctx.minute_color.g,
-							   ctx.minute_color.b);
-	} else if (atlas == &ctx.seconds_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, ctx.second_color.r, ctx.second_color.g,
-							   ctx.second_color.b);
-	}
+	// CRITICAL LIFE CYCLE HOOK: Invoke the translation bridge pass to synchronize colors cleanly
+	CommitBufferToSDL(renderer, atlas);
 }
 
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
