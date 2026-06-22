@@ -55,11 +55,36 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
  * to preserve complete application compilation.
  */
 void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
-	if (!atlas || !atlas->texture) {
+	if (!atlas || !atlas->texture || !atlas->index_buffer) {
 		return;
 	}
+	(void)renderer;
 
-	(void) renderer; // Silence unused parameter warning safely
+	// Calculate overall dimension boundaries for the atlas texture sheets
+
+	void* pixels = NULL;
+	int pitch = 0;
+
+	// Lock the streaming texture memory surface for a direct VRAM pipeline upload
+	if (SDL_LockTexture(atlas->texture, NULL, &pixels, &pitch) == 0) {
+		uint16_t* dst = (uint16_t*)pixels;
+		int pixels_per_row = pitch / sizeof(uint16_t);
+
+		for (int y = 0; y < atlas->atlas_h; y++) {
+			for (int x = 0; x < atlas->atlas_w; x++) {
+				int src_idx = (y * atlas->atlas_w) + x;
+				int dst_idx = (y * pixels_per_row) + x;
+
+				uint8_t pal_idx = atlas->index_buffer[src_idx];
+				if (pal_idx == PALETTE_TRANSPARENT) {
+					dst[dst_idx] = 0x0000; // Transparent clear pixel
+				} else {
+					dst[dst_idx] = 0xFFFF; // Pure White (Tintable lines/fills)
+				}
+			}
+		}
+		SDL_UnlockTexture(atlas->texture);
+	}
 
 	// Initialize with a default fallback color (Cat Body Color)
 	SDL_Color uniform_palette = ctx.cat_color;
@@ -159,18 +184,9 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 			= (SDL_FRect) { (float) cell_x + 1.0f, (float) cell_y + 1.0f,
 							(float) atlas->cell_w - 2.0f, (float) atlas->cell_h - 2.0f };
 
-		SDL_Rect viewport = { cell_x, cell_y, atlas->cell_w, atlas->cell_h };
-		SDL_SetRenderViewport(renderer, &viewport);
-
-		SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
-		SDL_FRect local_cell_rect = { 0.0f, 0.0f, (float) atlas->cell_w, (float) atlas->cell_h };
-		SDL_RenderFillRect(renderer, &local_cell_rect);
-
-		SDL_Rect inner_render_viewport
-			= { cell_x + 1, cell_y + 1, atlas->cell_w - 2, atlas->cell_h - 2 };
-		SDL_SetRenderViewport(renderer, &inner_render_viewport);
-
-		shader(renderer, atlas->cell_w - 2, atlas->cell_h - 2, scale, i, userdata);
+		// Intercept the renderer argument by passing the index buffer directly.
+		// Shift target offsets down by 1 pixel to respect the original padding metrics.
+		shader((SDL_Renderer*)atlas->index_buffer, cell_x + 1, cell_y + 1, atlas_w, i, userdata);
 	}
 
 	SDL_SetRenderViewport(renderer, NULL);
