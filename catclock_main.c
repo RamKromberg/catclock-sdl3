@@ -43,83 +43,6 @@ CatClock_AppContext ctx = { 0 };
 int target_fps_limit = 30;
 
 /**
- * Custom CPU-side 1-bit parser designed to load the unified range-of-motion mask
- * straight into system RAM to prevent text segment bloat and keep runtime lookups fast.
- */
-static uint8_t* CatClock_LoadHitboxMask(const char* filepath, int* out_w, int* out_h) {
-	if (!filepath || !out_w || !out_h)
-		return NULL;
-
-	SDL_IOStream* file = SDL_IOFromFile(filepath, "r");
-	if (!file) {
-		SDL_Log("Hitbox Error: Could not open hitbox file path: %s", filepath);
-		return NULL;
-	}
-
-	Sint64 file_size = SDL_GetIOSize(file);
-	if (file_size <= 0) {
-		SDL_CloseIO(file);
-		return NULL;
-	}
-
-	char* buffer = (char*) SDL_malloc(file_size + 1);
-	if (!buffer) {
-		SDL_CloseIO(file);
-		return NULL;
-	}
-
-	SDL_ReadIO(file, buffer, file_size);
-	buffer[file_size] = '\0';
-	SDL_CloseIO(file);
-
-	int w = 0, h = 0;
-	char* ptr = SDL_strstr(buffer, "_width");
-	if (ptr) {
-		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
-			ptr++;
-		w = SDL_atoi(ptr);
-	}
-
-	ptr = SDL_strstr(buffer, "_height");
-	if (ptr) {
-		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
-			ptr++;
-		h = SDL_atoi(ptr);
-	}
-
-	ptr = SDL_strstr(buffer, "{");
-	if (w <= 0 || h <= 0 || !ptr) {
-		SDL_free(buffer);
-		return NULL;
-	}
-	ptr++;
-
-	int bytes_per_row = (w + 7) / 8;
-	int total_bytes = bytes_per_row * h;
-	uint8_t* raw_bits = (uint8_t*) SDL_calloc(1, total_bytes);
-	if (!raw_bits) {
-		SDL_free(buffer);
-		return NULL;
-	}
-
-	for (int i = 0; i < total_bytes; i++) {
-		while (*ptr && *ptr != '0' && *(ptr + 1) != 'x' && *(ptr + 1) != 'X') {
-			if (*ptr == '}')
-				break;
-			ptr++;
-		}
-		if (*ptr == '}')
-			break;
-		raw_bits[i] = (uint8_t) SDL_strtol(ptr, &ptr, 16);
-	}
-
-	SDL_free(buffer);
-	*out_w = w;
-	*out_h = h;
-	return raw_bits;
-}
-
-/**
  * Pixel-Perfect Drag Interception Callback
  * Normalizes global cursor coordinates and executes a 3-nanosecond bitwise memory check.
  */
@@ -222,7 +145,7 @@ int main(int argc, char* argv[]) {
 	ctx.texture_cache_stale = true;
 
 	ctx.hitbox_bitmask
-		= CatClock_LoadHitboxMask("./assets/hitbox.xbm", &ctx.hitbox_mask_w, &ctx.hitbox_mask_h);
+		= CatClock_LoadRawXbmBits("./assets/hitbox.xbm", &ctx.hitbox_mask_w, &ctx.hitbox_mask_h);
 	if (!ctx.hitbox_bitmask) {
 		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
 					"Failed to load hitbox map. Full window drag fallback enabled.");

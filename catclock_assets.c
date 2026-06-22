@@ -67,6 +67,10 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 
 	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, false, false);
 
+	// Seed plain C software arrays into system RAM to enable seamless software masking
+	ctx.software_eyes_bitmask
+		= CatClock_LoadRawXbmBits("./assets/eyes.xbm", &ctx.software_mask_w, &ctx.software_mask_h);
+
 	return lib;
 }
 
@@ -193,6 +197,10 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 		SDL_DestroyTexture(lib->necktie.texture);
 	if (lib->eyesocket.texture)
 		SDL_DestroyTexture(lib->eyesocket.texture);
+	if (ctx.software_eyes_bitmask) {
+		SDL_free(ctx.software_eyes_bitmask);
+		ctx.software_eyes_bitmask = NULL;
+	}
 	SDL_free(lib);
 }
 
@@ -208,4 +216,81 @@ SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* l
 	if (SDL_strcmp(layer_id, "eyes") == 0)
 		return lib->eyesocket.texture;
 	return NULL;
+}
+
+/**
+ * Stateless Monochrome XBM Core Parser Utility
+ * Parses raw 1-bit text representations directly into contiguous system RAM buffers
+ */
+uint8_t* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {
+	if (!filepath || !out_w || !out_h)
+		return NULL;
+
+	SDL_IOStream* file = SDL_IOFromFile(filepath, "r");
+	if (!file) {
+		SDL_Log("XBM Error: Could not open bitmap file path: %s", filepath);
+		return NULL;
+	}
+
+	Sint64 file_size = SDL_GetIOSize(file);
+	if (file_size <= 0) {
+		SDL_CloseIO(file);
+		return NULL;
+	}
+
+	char* buffer = (char*) SDL_malloc(file_size + 1);
+	if (!buffer) {
+		SDL_CloseIO(file);
+		return NULL;
+	}
+
+	SDL_ReadIO(file, buffer, file_size);
+	buffer[file_size] = '\0';
+	SDL_CloseIO(file);
+
+	int w = 0, h = 0;
+	char* ptr = SDL_strstr(buffer, "_width");
+	if (ptr) {
+		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
+			ptr++;
+		w = SDL_atoi(ptr);
+	}
+
+	ptr = SDL_strstr(buffer, "_height");
+	if (ptr) {
+		while (*ptr && !SDL_isdigit((unsigned char) *ptr))
+			ptr++;
+		h = SDL_atoi(ptr);
+	}
+
+	ptr = SDL_strstr(buffer, "{");
+	if (w <= 0 || h <= 0 || !ptr) {
+		SDL_free(buffer);
+		return NULL;
+	}
+	ptr++;
+
+	int bytes_per_row = (w + 7) / 8;
+	int total_bytes = bytes_per_row * h;
+	uint8_t* raw_bits = (uint8_t*) SDL_calloc(1, total_bytes);
+	if (!raw_bits) {
+		SDL_free(buffer);
+		return NULL;
+	}
+
+	for (int i = 0; i < total_bytes; i++) {
+		while (*ptr && *ptr != '0' && *(ptr + 1) != 'x' && *(ptr + 1) != 'X') {
+			if (*ptr == '}')
+				break;
+			ptr++;
+		}
+		if (*ptr == '}')
+			break;
+		raw_bits[i] = (uint8_t) SDL_strtol(ptr, &ptr, 16);
+	}
+
+	SDL_free(buffer);
+	*out_w = w;
+	*out_h = h;
+	return raw_bits;
 }

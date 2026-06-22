@@ -531,7 +531,7 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 		SDL_FRect eyes_dst_rect
 			= { floorf((20.0f + render_pad_x + visual_pad) * runtime_scale),
 				floorf((16.0f + render_pad_y + visual_pad) * runtime_scale),
-				((float) ctx->eyes_atlas.cell_w - 1.0f), ((float) ctx->eyes_atlas.cell_h - 1.0f) };
+				(float) ctx->eyes_atlas.cell_w, (float) ctx->eyes_atlas.cell_h };
 
 		SDL_RenderTexture(renderer, ctx->eyes_atlas.texture, &eyes_src_rect, &eyes_dst_rect);
 	}

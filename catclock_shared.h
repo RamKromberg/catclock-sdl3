@@ -147,6 +147,11 @@ typedef struct {
 	int hitbox_mask_w;
 	int hitbox_mask_h;
 	uint8_t* hitbox_bitmask;
+
+	// Plain system memory array for hardware-free asset mask lookups
+	int software_mask_w;
+	int software_mask_h;
+	uint8_t* software_eyes_bitmask;
 #ifdef CATCLOCK_TELEMETRY
 	/* Hardware pipeline diagnostic telemetry metrics */
 	CatClock_TelemetryContext metrics;
@@ -251,6 +256,7 @@ void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* rende
 void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color);
 void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib);
 SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id);
+uint8_t* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h);
 
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
