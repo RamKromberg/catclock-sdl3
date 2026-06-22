@@ -32,6 +32,13 @@
 #define CHOP_OFFSET_X 24.0f
 #define CHOP_OFFSET_Y 10.0f
 
+// Palette Index Constants (8-Bit Compressed Array Layers)
+#define PALETTE_TRANSPARENT 0
+#define PALETTE_CAT_BODY 1
+#define PALETTE_SCLERA 2
+#define PALETTE_PUPIL_HAND 3
+#define PALETTE_BOWTIE 4
+
 #define CYCLE_PERIOD_MS 2000
 #define TOTAL_PHASES 60
 
@@ -60,14 +67,16 @@ typedef struct {
 
 typedef void (*CatClock_ShaderCallback)(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
 										int frame_idx, void* userdata);
-
 typedef struct {
-	SDL_Texture* texture;
-	int total_frames;
-	int cell_w;
-	int cell_h;
-	float last_scale;
-	SDL_FRect* src_rects;
+	SDL_Texture* texture; // Immediate 32-bit hardware target layer
+	uint8_t* index_buffer; // Compressed 8-bit CPU palette memory sheet
+	int total_frames; // Total animation phases tracked in space
+	int cell_w; // Scaled cell boundary width matrix
+	int cell_h; // Scaled cell boundary height matrix
+	int atlas_w; // Total width of the continuous atlas sheet
+	int atlas_h; // Total height of the continuous atlas sheet
+	float last_scale; // Scale factors checkpoint monitor
+	SDL_FRect* src_rects; // Frame clip boundary tracking coordinates
 } CatClock_ComputeAtlas;
 
 typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
