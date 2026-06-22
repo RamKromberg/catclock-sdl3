@@ -58,61 +58,61 @@ void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
 	if (!atlas || !atlas->texture || !atlas->index_buffer) {
 		return;
 	}
-	(void)renderer;
+	(void) renderer;
 
-	// Calculate overall dimension boundaries for the atlas texture sheets
+	int total_bytes = atlas->atlas_w * atlas->atlas_h;
 
-	void* pixels = NULL;
-	int pitch = 0;
+	uint16_t* staging_pixels = (uint16_t*) SDL_malloc(total_bytes * sizeof(uint16_t));
+	if (!staging_pixels) {
+		return;
+	}
 
-	// Lock the streaming texture memory surface for a direct VRAM pipeline upload
-	if (SDL_LockTexture(atlas->texture, NULL, &pixels, &pitch) == 0) {
-		uint16_t* dst = (uint16_t*)pixels;
-		int pixels_per_row = pitch / sizeof(uint16_t);
+	for (int i = 0; i < total_bytes; i++) {
+		uint8_t pal_idx = atlas->index_buffer[i];
+		SDL_Color color = { 0, 0, 0, 0 };
+		bool active = false;
 
-		for (int y = 0; y < atlas->atlas_h; y++) {
-			for (int x = 0; x < atlas->atlas_w; x++) {
-				int src_idx = (y * atlas->atlas_w) + x;
-				int dst_idx = (y * pixels_per_row) + x;
-
-				uint8_t pal_idx = atlas->index_buffer[src_idx];
-				if (pal_idx == PALETTE_TRANSPARENT) {
-					dst[dst_idx] = 0x0000; // Transparent clear pixel
-				} else {
-					dst[dst_idx] = 0xFFFF; // Pure White (Tintable lines/fills)
-				}
-			}
+		if (pal_idx == PALETTE_CAT_BODY) {
+			color = ctx.cat_color;
+			active = true;
+		} else if (pal_idx == PALETTE_SCLERA) {
+			color = ctx.sclera_color;
+			active = true;
+		} else if (pal_idx == PALETTE_PUPIL) {
+			color = ctx.pupil_color;
+			active = true;
+		} else if (pal_idx == PALETTE_HAND_HOUR) {
+			color = ctx.hour_color;
+			active = true;
+		} else if (pal_idx == PALETTE_HAND_MINUTE) {
+			color = ctx.minute_color;
+			active = true;
+		} else if (pal_idx == PALETTE_HAND_SECOND) {
+			color = ctx.second_color;
+			active = true;
+		} else if (pal_idx == PALETTE_NECKTIE) {
+			color = ctx.tie_color;
+			active = true;
+		} else if (pal_idx == PALETTE_HALO) {
+			color = ctx.detail_color;
+			active = true;
 		}
-		SDL_UnlockTexture(atlas->texture);
+
+		if (active) {
+			uint16_t r_ch = ((color.r >> 4) & 0x0F) << 12;
+			uint16_t g_ch = ((color.g >> 4) & 0x0F) << 8;
+			uint16_t b_ch = ((color.b >> 4) & 0x0F) << 4;
+			uint16_t a_ch = ((color.a >> 4) & 0x0F);
+			staging_pixels[i] = r_ch | g_ch | b_ch | a_ch;
+		} else {
+			staging_pixels[i] = 0x0000;
+		}
 	}
 
-	// Initialize with a default fallback color (Cat Body Color)
-	SDL_Color uniform_palette = ctx.cat_color;
+	int pitch = atlas->atlas_w * sizeof(uint16_t);
+	SDL_UpdateTexture(atlas->texture, NULL, staging_pixels, pitch);
 
-	// Check specific atlas identity bindings to synchronize hand and eye overrides cleanly
-	if (atlas == &ctx.hands_atlas) {
-		uniform_palette = ctx.hour_color;
-	} else if (atlas == &ctx.minutes_atlas) {
-		uniform_palette = ctx.minute_color;
-	} else if (atlas == &ctx.seconds_atlas) {
-		uniform_palette = ctx.second_color;
-	} else if (atlas == &ctx.tail_atlas) {
-		uniform_palette = ctx.cat_color; // Maps to -catcolor
-	}
-
-	// Apply color modulations safely to immediate hardware texture layers
-	if (atlas == &ctx.hands_atlas || atlas == &ctx.minutes_atlas || atlas == &ctx.seconds_atlas
-		|| atlas == &ctx.tail_atlas) {
-		SDL_SetTextureColorMod(atlas->texture, uniform_palette.r, uniform_palette.g,
-							   uniform_palette.b);
-		SDL_SetTextureAlphaMod(atlas->texture, uniform_palette.a);
-	} else if (atlas == &ctx.eyes_atlas) {
-		// BYPASS MODULATION: The eyes rely on internal procedural transparency masks.
-		// We restore original blending by resetting modulation to full white/opaque
-		// until the 8-bit palette buffer refactoring is implemented.
-		SDL_SetTextureColorMod(atlas->texture, 255, 255, 255);
-		SDL_SetTextureAlphaMod(atlas->texture, 255);
-	}
+	SDL_free(staging_pixels);
 }
 
 void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
@@ -156,8 +156,18 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	int rows = (total_frames + cols - 1) / cols;
 	int atlas_w = cols * atlas->cell_w;
 	int atlas_h = rows * atlas->cell_h;
-	
-	atlas->index_buffer = (uint8_t*)SDL_calloc(1, atlas_w * atlas_h);
+
+	atlas->index_buffer = (uint8_t*) SDL_calloc(1, atlas_w * atlas_h);
+	if (!atlas->index_buffer) {
+		SDL_free(atlas->src_rects);
+		atlas->src_rects = NULL;
+		return;
+	}
+
+	// Fix the 0x0 Dimension Bug: Seed structural metrics to active context
+	atlas->atlas_w = atlas_w;
+	atlas->atlas_h = atlas_h;
+
 	if (!atlas->index_buffer) {
 		SDL_free(atlas->src_rects);
 		atlas->src_rects = NULL;
@@ -165,8 +175,8 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	}
 
 	// Sticking to 16-bit format to ensure perfect texture alpha blending and pixel art downscaling
-	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444, SDL_TEXTUREACCESS_STREAMING,
-									   atlas_w, atlas_h);
+	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444,
+									   SDL_TEXTUREACCESS_STREAMING, atlas_w, atlas_h);
 	if (!atlas->texture) {
 		SDL_free(atlas->src_rects);
 		atlas->src_rects = NULL;
@@ -184,9 +194,15 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 			= (SDL_FRect) { (float) cell_x + 1.0f, (float) cell_y + 1.0f,
 							(float) atlas->cell_w - 2.0f, (float) atlas->cell_h - 2.0f };
 
-		// Intercept the renderer argument by passing the index buffer directly.
-		// Shift target offsets down by 1 pixel to respect the original padding metrics.
-		shader((SDL_Renderer*)atlas->index_buffer, cell_x + 1, cell_y + 1, atlas_w, i, userdata);
+		// Clean the local cell memory footprint to prevent overlapping pixel leakage across frames
+		for (int cy = 0; cy < atlas->cell_h; cy++) {
+			for (int cx = 0; cx < atlas->cell_w; cx++) {
+				int clear_idx = ((cell_y + cy) * atlas_w) + (cell_x + cx);
+				atlas->index_buffer[clear_idx] = PALETTE_TRANSPARENT;
+			}
+		}
+
+		shader((SDL_Renderer*) atlas->index_buffer, cell_x, cell_y, atlas_w, i, userdata);
 	}
 
 	SDL_SetRenderViewport(renderer, NULL);
@@ -214,52 +230,66 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->last_scale = -1.0f;
 }
 
-void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
+void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
 								 int frame_idx, void* userdata) {
 	CatClock_TailShaderArgs* blueprint_args = (CatClock_TailShaderArgs*) userdata;
 
 	float offsets_x[] = { -1.0f, 1.0f, 0.0f, 0.0f, -1.0f, -1.0f, 1.0f, 1.0f };
 	float offsets_y[] = { 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
 
+	// Read the actual uniform window scale factor to prevent out-of-bounds explosion
+	float real_scale = ctx.current_scale;
+
 	for (int i = 0; i < 8; i++) {
 		CatClock_TailShaderArgs pass_args;
 		pass_args.app_ctx = blueprint_args ? blueprint_args->app_ctx : NULL;
-		pass_args.offset_x = offsets_x[i] * scale;
-		pass_args.offset_y = offsets_y[i] * scale;
+		pass_args.offset_x = offsets_x[i] * real_scale;
+		pass_args.offset_y = offsets_y[i] * real_scale;
 		pass_args.force_halo_color = true;
 
-		CatClock_ShaderTail(renderer, cell_w, cell_h, scale, frame_idx, &pass_args);
+		CatClock_ShaderTail(renderer, cell_x, cell_y, atlas_w_f, frame_idx, &pass_args);
 	}
 }
 
 #ifdef CATCLOCK_SHOT
 // Clean duplication of the diagnostic dumper stripped of real-time wall-clock uptime limits
 void CatClock_DiagnosticShotDump(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
-	if (!renderer || !atlas)
+	if (!renderer || !atlas || !atlas->index_buffer)
 		return;
 
 	static int multi_frame_sequence_counter = 0;
 
-	// Unconditionally evaluate frame counts and capture exactly on frame index tick 60
+	// Execute exclusively on frame tick 60 to sample a stable cycle snapshot
 	if (multi_frame_sequence_counter == 60) {
-		SDL_Texture* old_target = SDL_GetRenderTarget(renderer);
-		SDL_SetRenderTarget(renderer, NULL);
+		SDL_Log(
+			"=== [DIAGNOSTIC DUMP] Writing raw 8-bit memory canvas layout straight to disk ===");
 
-		SDL_Surface* screen_surf = SDL_RenderReadPixels(renderer, NULL);
-		if (screen_surf) {
-			SDL_Surface* final_rgba = SDL_ConvertSurface(screen_surf, SDL_PIXELFORMAT_RGBA8888);
-			if (final_rgba) {
-				char filename_buffer[256];
-				snprintf(filename_buffer, sizeof(filename_buffer), "catclock_shot_target_raw.png");
+		// Instantiate a dedicated target surface using standard 32-bit pixel layout format
+		SDL_Surface* surface
+			= SDL_CreateSurface(atlas->atlas_w, atlas->atlas_h, SDL_PIXELFORMAT_RGBA8888);
+		if (surface) {
+			uint32_t* pixels = (uint32_t*) surface->pixels;
 
-				SDL_SavePNG(final_rgba, filename_buffer);
-				SDL_Log("=== [SHOT ENGINE] SINGLE-FRAME PERSPECTIVE CAPTURED -> %s ===",
-						filename_buffer);
-				SDL_DestroySurface(final_rgba);
+			// Translate raw index array data into explicit colors for the diagnostic capture
+			for (int i = 0; i < atlas->atlas_w * atlas->atlas_h; i++) {
+				uint8_t pal_idx = atlas->index_buffer[i];
+				if (pal_idx == PALETTE_CAT_BODY) {
+					pixels[i] = 0x000000FF; // True deep black for the cat pendulum geometry
+				} else if (pal_idx == PALETTE_SCLERA) {
+					pixels[i] = 0xFFFFFFFF; // Pure white for tracking halo outlines
+				} else {
+					pixels[i] = 0x0000FFFF; // Solid high-contrast background mask
+				}
 			}
-			SDL_DestroySurface(screen_surf);
+
+			char filename_buffer[256];
+			snprintf(filename_buffer, sizeof(filename_buffer), "catclock_shot_target_raw.png");
+
+			SDL_SavePNG(surface, filename_buffer);
+			SDL_Log("=== [DIAGNOSTIC DUMP] Finished writing memory map to: %s ===",
+					filename_buffer);
+			SDL_DestroySurface(surface);
 		}
-		SDL_SetRenderTarget(renderer, old_target);
 	}
 	multi_frame_sequence_counter++;
 }

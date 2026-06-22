@@ -34,10 +34,14 @@
 
 // Palette Index Constants (8-Bit Compressed Array Layers)
 #define PALETTE_TRANSPARENT 0
-#define PALETTE_CAT_BODY 1
-#define PALETTE_SCLERA 2
-#define PALETTE_PUPIL_HAND 3
-#define PALETTE_BOWTIE 4
+#define PALETTE_CAT_BODY 1 // Body, nose, tail main mesh
+#define PALETTE_SCLERA 2 // Sclera socket rectangles
+#define PALETTE_PUPIL 3 // Moving eye pupils
+#define PALETTE_HAND_HOUR 4 // Hour hand line geometry
+#define PALETTE_HAND_MINUTE 5 // Minute hand line geometry
+#define PALETTE_HAND_SECOND 6 // Second hand line geometry
+#define PALETTE_NECKTIE 7 // Necktie structure
+#define PALETTE_HALO 8 // 1px Outline / Tail halo background
 
 #define CYCLE_PERIOD_MS 2000
 #define TOTAL_PHASES 60
@@ -157,6 +161,75 @@ typedef struct {
 	float offset_y;
 	bool force_halo_color;
 } CatClock_TailShaderArgs;
+
+// ============================================================================
+// CPU SOFTWARE RASTERIZATION PRIMITIVES (STAGE 3)
+// ============================================================================
+
+static inline void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int atlas_w, int atlas_h,
+									 uint8_t palette_idx) {
+	// Strict bounds checking eliminates illegal memory access across any atlas resolution layer
+	if (x >= 0 && x < atlas_w && y >= 0 && y < atlas_h) {
+		buffer[(y * atlas_w) + x] = palette_idx;
+	}
+}
+
+static inline void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2,
+										int y2, int atlas_w, int atlas_h, uint8_t palette_idx) {
+	// Sort coordinates vertically (y0 <= y1 <= y2)
+	if (y0 > y1) {
+		int t;
+		t = x0;
+		x0 = x1;
+		x1 = t;
+		t = y0;
+		y0 = y1;
+		y1 = t;
+	}
+	if (y0 > y2) {
+		int t;
+		t = x0;
+		x0 = x2;
+		x2 = t;
+		t = y0;
+		y0 = y2;
+		y2 = t;
+	}
+	if (y1 > y2) {
+		int t;
+		t = x1;
+		x1 = x2;
+		x2 = t;
+		t = y1;
+		y1 = y2;
+		y2 = t;
+	}
+
+	if (y0 == y2)
+		return;
+
+	int total_height = y2 - y0;
+	for (int i = 0; i < total_height; i++) {
+		int current_y = y0 + i;
+		int second_half = current_y > y1 || y0 == y1;
+		int segment_height = second_half ? y2 - y1 : y1 - y0;
+
+		float alpha = (float) i / total_height;
+		float beta = (float) (current_y - (second_half ? y1 : y0)) / segment_height;
+
+		int ax = x0 + (int) ((x2 - x0) * alpha);
+		int bx = second_half ? x1 + (int) ((x2 - x1) * beta) : x0 + (int) ((x1 - x0) * beta);
+
+		if (ax > bx) {
+			int t = ax;
+			ax = bx;
+			bx = t;
+		}
+		for (int cx = ax; cx <= bx; cx++) {
+			PlotSoftwarePixel(buffer, cx, current_y, atlas_w, atlas_h, palette_idx);
+		}
+	}
+}
 
 /* CRITICAL LINK FIX: Broaden visibility context scope to global compiler translation units */
 extern CatClock_AppContext ctx;

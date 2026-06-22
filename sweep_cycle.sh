@@ -1,7 +1,11 @@
 #!/bin/sh
 make clean
 make CFLAGS="-Wall -Wextra -O2 -DCATCLOCK_DEBUG -DCATCLOCK_CHROMA"
-./catclock-sdl3 -scale 2.0
+if [ $# -gt 0 ]; then
+    ./catclock-sdl3 "$@"
+else
+    ./catclock-sdl3 -scale 2.0
+fi
 W=$(identify -format "%w" catclock_live_frame_60.png)
 montage -geometry "${W}x+4+4" -tile 10x7 $(ls catclock_live_frame_*.png | sort -V) unified_live_grid.png
 rm catclock_live_frame_*.png

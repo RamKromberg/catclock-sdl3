@@ -1,5 +1,5 @@
 /******************************************************************************
- * File Name:    catclock_tail.c
+ * File Name:    catclock_tail.h
  * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
  *
  * Authorship & Collaboration:
@@ -21,10 +21,20 @@
 #define RING_SEGMENTS 36
 #define CAP_SEGMENTS 17
 
-void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
-						 void* userdata) {
-	(void) cell_h;
-	(void) scale;
+void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
+						 int frame_idx, void* userdata) {
+	uint8_t* buffer = (uint8_t*) renderer;
+	int atlas_w = (int) atlas_w_f;
+
+	// Dynamically resolve total vertical dimensions to protect clipping passes
+	int cols = 8;
+	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
+	int total_frames = total_fps_frames * 2;
+	int rows = (total_frames + cols - 1) / cols;
+
+	// FIX THE SCALE BUG: Derive actual scaled cell height from the horizontal sheet stride
+	int scaled_cell_h = atlas_w / cols;
+	int atlas_h = rows * scaled_cell_h;
 
 	CatClock_TailShaderArgs* args = (CatClock_TailShaderArgs*) userdata;
 
@@ -32,24 +42,9 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float shift_y = args ? args->offset_y : 0.0f;
 
 	bool is_halo = args && args->force_halo_color;
-	SDL_Color color_bits;
+	uint8_t palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
 
-	if (is_halo) {
-		color_bits = (SDL_Color) { 255, 255, 255, 255 };
-	} else if (args && args->app_ctx) {
-		color_bits = args->app_ctx->cat_color;
-	} else {
-		color_bits = (SDL_Color) { 0, 0, 0, 255 };
-	}
-
-	float r_f = color_bits.r / 255.0f;
-	float g_f = color_bits.g / 255.0f;
-	float b_f = color_bits.b / 255.0f;
-	float a_f = color_bits.a / 255.0f;
-
-	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
-	float total_cycle_frames = (float) (total_fps_frames * 2);
-
+	float total_cycle_frames = (float) total_frames;
 	float progress = ((float) frame_idx + 0.5f) / total_cycle_frames;
 	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
@@ -63,9 +58,10 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float cos_a = cosf(rad);
 	float sin_a = sinf(rad);
 
-	float internal_unit_ratio = (float) cell_w / 96.0f;
-	float pivot_x = ((float) cell_w / 2.0f) - (1.0f * internal_unit_ratio) + shift_x;
-	float pivot_y = (12.0f * internal_unit_ratio) + shift_y;
+	float internal_unit_ratio = (float) (atlas_w / 8) / 96.0f;
+	float pivot_x
+		= (float) cell_x + (((float) atlas_w / 8.0f) / 2.0f) - (1.0f * internal_unit_ratio);
+	float pivot_y = (float) cell_y + (12.0f * internal_unit_ratio);
 
 	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;
 	float half_width = (6.5f * internal_unit_ratio) + horizontal_cushion;
@@ -77,61 +73,32 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 	float capsule_length_stretch = 6.5f * internal_unit_ratio;
 
 	float loop_center_x = (outer_radius + horizontal_cushion) - half_width;
+	float seam_pad = 0.5f * internal_unit_ratio;
 	float loop_center_y = stem_end_y;
 
 	float cap_center_x = loop_center_x + ((outer_radius + inner_radius) / 2.0f);
-	float cap_center_y = loop_center_y - capsule_length_stretch;
+	// Shift only the vertical position downward to overlap the straight rod cleanly
+	float cap_center_y = loop_center_y - capsule_length_stretch + seam_pad;
 	float cap_radius = (outer_radius - inner_radius) / 2.0f;
 
-	int max_v = 150;
-	CatClock_GpuVertex* gpu_vertices
-		= (CatClock_GpuVertex*) SDL_malloc(sizeof(CatClock_GpuVertex) * max_v);
-	int* indices = (int*) SDL_malloc(sizeof(int) * max_v * 6);
-
-	if (!gpu_vertices || !indices) {
-		if (gpu_vertices)
-			SDL_free(gpu_vertices);
-		if (indices)
-			SDL_free(indices);
-		return;
-	}
-
-	int v_count = 0;
-	int i_count = 0;
-
-// Software pipeline lambda routine to populate clean sequential GPU vertex layouts
-#define ADD_GPU_VTX(lx, ly)                                                                        \
+#define TRANSFORM_AND_PLOT(lx, ly, out_x, out_y)                                                   \
 	do {                                                                                           \
-		if (v_count < max_v) {                                                                     \
-			gpu_vertices[v_count].position[0] = pivot_x + ((lx) * cos_a - (ly) * sin_a);           \
-			gpu_vertices[v_count].position[1] = pivot_y + ((lx) * sin_a + (ly) * cos_a);           \
-			gpu_vertices[v_count].color[0] = r_f;                                                  \
-			gpu_vertices[v_count].color[1] = g_f;                                                  \
-			gpu_vertices[v_count].color[2] = b_f;                                                  \
-			gpu_vertices[v_count].color[3] = a_f;                                                  \
-			v_count++;                                                                             \
-		}                                                                                          \
+		out_x = (int) (pivot_x + shift_x + ((lx) * cos_a - (ly) * sin_a));                         \
+		out_y = (int) (pivot_y + shift_y + ((lx) * sin_a + (ly) * cos_a));                         \
 	} while (0)
 
 	// PART 1: STEM BODY
-	int s0 = v_count;
-	ADD_GPU_VTX(-half_width, stem_start_y);
-	int s1 = v_count;
-	ADD_GPU_VTX(half_width, stem_start_y);
-	int s2 = v_count;
-	ADD_GPU_VTX(-half_width, stem_end_y);
-	int s3 = v_count;
-	ADD_GPU_VTX(half_width, stem_end_y);
+	int sx0, sy0, sx1, sy1, sx2, sy2, sx3, sy3;
+	TRANSFORM_AND_PLOT(-half_width, stem_start_y, sx0, sy0);
+	TRANSFORM_AND_PLOT(half_width, stem_start_y, sx1, sy1);
+	TRANSFORM_AND_PLOT(-half_width, stem_end_y, sx2, sy2);
+	TRANSFORM_AND_PLOT(half_width, stem_end_y, sx3, sy3);
 
-	indices[i_count++] = s0;
-	indices[i_count++] = s1;
-	indices[i_count++] = s2;
-	indices[i_count++] = s1;
-	indices[i_count++] = s3;
-	indices[i_count++] = s2;
+	FillSoftwareTriangle(buffer, sx0, sy0, sx1, sy1, sx2, sy2, atlas_w, atlas_h, palette_idx);
+	FillSoftwareTriangle(buffer, sx1, sy1, sx3, sy3, sx2, sy2, atlas_w, atlas_h, palette_idx);
 
 	// PART 2: THE CURVED BOTTOM RING HOOK
-	int ring_v_start = v_count;
+	int last_ox = 0, last_oy = 0, last_ix = 0, last_iy = 0;
 	for (int i = 0; i < RING_SEGMENTS; i++) {
 		float t = (float) i / (float) (RING_SEGMENTS - 1);
 		float sweep_rad = (float) M_PI - (t * (float) M_PI);
@@ -148,91 +115,55 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float s
 			iy = stem_end_y;
 		}
 
-		ADD_GPU_VTX(ox, oy);
-		ADD_GPU_VTX(ix, iy);
-	}
+		int p_ox, p_oy, p_ix, p_iy;
+		TRANSFORM_AND_PLOT(ox, oy, p_ox, p_oy);
+		TRANSFORM_AND_PLOT(ix, iy, p_ix, p_iy);
 
-	for (int i = 0; i < RING_SEGMENTS - 1; i++) {
-		int r_o0 = ring_v_start + (i * 2);
-		int r_i0 = ring_v_start + (i * 2) + 1;
-		int r_o1 = ring_v_start + ((i + 1) * 2);
-		int r_i1 = ring_v_start + ((i + 1) * 2) + 1;
-
-		indices[i_count++] = r_o0;
-		indices[i_count++] = r_i0;
-		indices[i_count++] = r_o1;
-		indices[i_count++] = r_i0;
-		indices[i_count++] = r_i1;
-		indices[i_count++] = r_o1;
+		if (i > 0) {
+			FillSoftwareTriangle(buffer, last_ox, last_oy, last_ix, last_iy, p_ox, p_oy, atlas_w,
+								 atlas_h, palette_idx);
+			FillSoftwareTriangle(buffer, last_ix, last_iy, p_ix, p_iy, p_ox, p_oy, atlas_w, atlas_h,
+								 palette_idx);
+		}
+		last_ox = p_ox;
+		last_oy = p_oy;
+		last_ix = p_ix;
+		last_iy = p_iy;
 	}
 
 	// PART 3: THE ELONGATED STRAIGHT EXTENSION
-	int eo0 = ring_v_start + (RING_SEGMENTS - 1) * 2;
-	int ei0 = ring_v_start + (RING_SEGMENTS - 1) * 2 + 1;
+	int ex0, ey0, ex1, ey1;
+	TRANSFORM_AND_PLOT(loop_center_x + outer_radius, loop_center_y - capsule_length_stretch, ex0,
+					   ey0);
+	TRANSFORM_AND_PLOT(loop_center_x + inner_radius, loop_center_y - capsule_length_stretch, ex1,
+					   ey1);
 
-	float ex1 = loop_center_x + outer_radius;
-	float ey1 = loop_center_y - capsule_length_stretch;
-	float ex0 = loop_center_x + inner_radius;
-	float ey0 = loop_center_y - capsule_length_stretch;
-
-	int eo1 = v_count;
-	ADD_GPU_VTX(ex1, ey1);
-	int ei1 = v_count;
-	ADD_GPU_VTX(ex0, ey0);
-
-	indices[i_count++] = eo0;
-	indices[i_count++] = ei0;
-	indices[i_count++] = eo1;
-	indices[i_count++] = ei0;
-	indices[i_count++] = ei1;
-	indices[i_count++] = eo1;
+	FillSoftwareTriangle(buffer, last_ox, last_oy, last_ix, last_iy, ex0, ey0, atlas_w, atlas_h,
+						 palette_idx);
+	FillSoftwareTriangle(buffer, last_ix, last_iy, ex1, ey1, ex0, ey0, atlas_w, atlas_h,
+						 palette_idx);
 
 	// PART 4: THE ROUNDED CAPSULE END-CAP TIP
-	int cap_center = v_count;
-	ADD_GPU_VTX(cap_center_x, cap_center_y);
-	int cap_arc_start = v_count;
+	int p_cap_cx, p_cap_cy;
+	TRANSFORM_AND_PLOT(cap_center_x, cap_center_y, p_cap_cx, p_cap_cy);
 
+	int last_cx = ex0, last_cy = ey0;
 	for (int i = 0; i < CAP_SEGMENTS; i++) {
 		float t = (float) i / (float) (CAP_SEGMENTS - 1);
 		float cap_arc_rad = t * (float) M_PI;
 		float cx = cap_center_x + cap_radius * cosf(cap_arc_rad);
 		float cy = cap_center_y - cap_radius * sinf(cap_arc_rad);
-		ADD_GPU_VTX(cx, cy);
-	}
 
-	for (int i = 0; i < CAP_SEGMENTS - 1; i++) {
-		indices[i_count++] = cap_center;
-		indices[i_count++] = cap_arc_start + i;
-		indices[i_count++] = cap_arc_start + i + 1;
-	}
+		int p_cx, p_cy;
+		TRANSFORM_AND_PLOT(cx, cy, p_cx, p_cy);
 
-	// Terminal Rasterization Translation Pass mapping GpuVertex blocks into native SDL // Terminal
-	// Rasterization Translation Pass mapping GpuVertex blocks into native SDL components
-	SDL_Vertex* sdl_vertices = (SDL_Vertex*) SDL_malloc(sizeof(SDL_Vertex) * v_count);
-	if (sdl_vertices) {
-		for (int v = 0; v < v_count; v++) {
-			sdl_vertices[v].position.x = gpu_vertices[v].position[0];
-			sdl_vertices[v].position.y = gpu_vertices[v].position[1];
-			sdl_vertices[v].color.r = gpu_vertices[v].color[0];
-			sdl_vertices[v].color.g = gpu_vertices[v].color[1];
-			sdl_vertices[v].color.b = gpu_vertices[v].color[2];
-			sdl_vertices[v].color.a = gpu_vertices[v].color[3];
-			sdl_vertices[v].tex_coord = (SDL_FPoint) { 0.0f, 0.0f };
+		if (i > 0) {
+			FillSoftwareTriangle(buffer, p_cap_cx, p_cap_cy, last_cx, last_cy, p_cx, p_cy, atlas_w,
+								 atlas_h, palette_idx);
 		}
-
-		if (is_halo) {
-			SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "catback"),
-									SDL_BLENDMODE_BLEND);
-		} else {
-			SDL_SetTextureBlendMode(CatClock_GetXbmTextureLayer(ctx.xbm_lib, "catback"),
-									SDL_BLENDMODE_NONE);
-		}
-
-		SDL_RenderGeometry(renderer, NULL, sdl_vertices, v_count, indices, i_count);
-		SDL_free(sdl_vertices);
+		last_cx = p_cx;
+		last_cy = p_cy;
 	}
 
-#undef ADD_GPU_VTX
-	SDL_free(indices);
-	SDL_free(gpu_vertices);
+#undef TRANSFORM_AND_PLOT
 }
