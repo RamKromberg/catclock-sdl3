@@ -332,11 +332,7 @@ int main(int argc, char* argv[]) {
 				SDL_RenderPresent(renderer);
 /*
 Dumps Frames.
-USE:
-CMD='make clean && make CFLAGS="-Wall -Wextra -O2 -DCATCLOCK_DEBUG -DCATCLOCK_CHROMA" &&
-./catclock-sdl3 -scale 2.0'; clear && echo -e "\e[32m$\e[0m $CMD" && eval "$CMD" W=$(identify
--format "%w" catclock_live_frame_60.png); montage -geometry "${W}x+4+4" -tile 10x7 $(ls
-catclock_live_frame_*.png | sort -V) unified_live_grid.png rm catclock_live_frame_*.png
+Use with sweep_cycle.sh.
 */
 #ifdef CATCLOCK_DEBUG
 				// Isolated diagnostic block evaluating directly on the presentation backbuffer
@@ -366,7 +362,7 @@ catclock_live_frame_*.png | sort -V) unified_live_grid.png rm catclock_live_fram
 					SDL_SetRenderTarget(renderer, old_target);
 
 					// DELAY COOLDOWN: Gives the file system 50ms to finish writing to disk
-					SDL_Delay(100);
+					SDL_Delay(150);
 				}
 				live_loop_sequence_counter++;
 #endif
