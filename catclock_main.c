@@ -15,13 +15,16 @@
  *****************************************************************************/
 
 // clang-format off
+#ifndef SOKOL_IMPL
 #define SOKOL_IMPL
+#endif
 #include "sokol_gfx.h"
 #include "sokol_log.h"
 
 #include "catclock_shared.h"
 #include "catclock_atlas.h"
 // clang-format on
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -147,19 +150,76 @@ int main(int argc, char* argv[]) {
 	// -------------------------------------------------------------------------
 	// Stage 4: Bootstrap Native Sokol GFX Subsystem in Background Validation
 	// -------------------------------------------------------------------------
-	sg_desc sokol_description = {
-		.logger.func = slog_func // Links the low-overhead helper logging config
-	};
+	sg_desc sokol_description = { .logger.func = slog_func };
 	sg_setup(&sokol_description);
 
 	if (sg_isvalid()) {
-		SDL_Log("[SOKOL BOOTSTRAP] Hardware graphics subsystem initialized successfully in "
-				"parallel loop.");
+		SDL_Log("[SOKOL BOOTSTRAP] Graphics backend initialized successfully!");
 	} else {
 		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
 					"[SOKOL ERROR] Failed to bind background GPU context.");
 	}
+
 	// -------------------------------------------------------------------------
+	// STAGE 4: Early-2024 Sokol GFX Quad Mesh & Shader Pipeline Configuration
+	// -------------------------------------------------------------------------
+	// 1. Viewport-Filling Mesh (2D Positions X,Y + UV Standard Coordinates)
+	float quad_vertices[] = {
+		-1.0f, 1.0f,  0.0f, 0.0f, // Top-Left Corner
+		1.0f,  1.0f,  1.0f, 0.0f, // Top-Right Corner
+		-1.0f, -1.0f, 0.0f, 1.0f, // Bottom-Left Corner
+		1.0f,  -1.0f, 1.0f, 1.0f // Bottom-Right Corner
+	};
+
+	sg_buffer_desc vertex_buffer_desc
+		= { .data = SG_RANGE(quad_vertices), .label = "viewport-filling-quad-mesh" };
+	sg_buffer quad_vbuf = sg_make_buffer(&vertex_buffer_desc);
+
+	// 2. Early-2024 Direct Backend Shader Specification (vs and fs blocks)
+	sg_shader_desc shader_desc = { .vs.source = "#version 330\n"
+												"layout(location=0) in vec2 position;\n"
+												"layout(location=1) in vec2 texcoord;\n"
+												"out vec2 uv;\n"
+												"void main() {\n"
+												"    gl_Position = vec4(position, 0.0, 1.0);\n"
+												"    uv = texcoord;\n"
+												"}\n",
+								   .fs.source = "#version 330\n"
+												"in vec2 uv;\n"
+												"out vec4 frag_color;\n"
+												"void main() {\n"
+												"    frag_color = vec4(uv.x, uv.y, 0.5, 1.0);\n"
+												"}\n",
+								   .label = "prototype-headless-shader" };
+	sg_shader quad_shader = sg_make_shader(&shader_desc);
+
+	// 3. Early-2024 Immutable Pipeline State Object Configuration
+	sg_pipeline_desc pipeline_desc = {
+    .shader = quad_shader,
+    .layout = {
+        .attrs = {
+            [0] = { .format = SG_VERTEXFORMAT_FLOAT2 }, // position mapping entry
+            [1] = { .format = SG_VERTEXFORMAT_FLOAT2 }  // texcoord mapping entry
+        }
+    },
+    .primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP,
+    .colors = {
+        [0] = {
+            .blend = {
+                .enabled = true,
+                .src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+                .dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA
+            }
+        }
+    },
+    // Remainder of constraints omitted to automatically inherit target pass pixel format context
+    .label = "headless-quad-pipeline"
+};
+	sg_pipeline quad_pipeline = sg_make_pipeline(&pipeline_desc);
+
+	// Prevent unused variables compiler complaints during this validation stage
+	(void) quad_vbuf;
+	(void) quad_pipeline;
 
 	SDL_GetRenderOutputSize(renderer, &ctx.current_win_w, &ctx.current_win_h);
 	ctx.xbm_lib = CatClock_InitXbmLibrary(renderer);
@@ -374,12 +434,17 @@ Use with sweep_cycle.sh.
 
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
 
-	// Shutdown the parallel background graphics framework securely
-	sg_shutdown();
-
+	// CRITICAL PIVOT: Destroy the conflicting SDL renderer first.
+	// This detaches the windows bindings so we can exit cleanly.
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
-	SDL_Quit();
 
+	// Bypass explicit Sokol handle deletion calls to prevent driver-side latching.
+	// The runtime environment handles total VRAM reclamation upon process exit.
+	if (sg_isvalid()) {
+		sg_shutdown();
+	}
+
+	SDL_Quit();
 	return 0;
 }

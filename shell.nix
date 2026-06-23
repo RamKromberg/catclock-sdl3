@@ -2,14 +2,20 @@
 
 let
   windowsPkgs = pkgs.pkgsCross.mingwW64;
-  
-  # Tracks the specified Sokol master revision commit
+
+  # last stable version before 2024-01-29 and 2024-01-30 when 363d53e through 06913be introduced the massive Spring Cleaning Overhaul that renamed sg_pass to attachments, deleted context pooling, removed sg_begin_default_pass, and flattened stage array names.
   srcSokol = pkgs.fetchFromGitHub {
     owner = "floooh";
     repo = "sokol";
-    rev = "28f9d8d44d92dab8536791a9f7d13d7e911a2b39";
-    sha256 = "sha256-2KdUPf0ceUeh8Fd+VDoOdJKmE6ZjjZnW8S5apDxniDk=";
+    rev = "f58a78539e6a972700579ee72cb3f2d66f07088f";
+    sha256 = "sha256-QGg1XXFFMjVo4gNn00CHouowywZQQko9tYnBFYAedJA=";
   };
+  #$ git log -1 f58a78539e6a972700579ee72cb3f2d66f07088f
+  #commit f58a78539e6a972700579ee72cb3f2d66f07088f
+  #Author: Andre Weissflog <floooh@gmail.com>
+  #Date:   Wed Jan 24 19:13:52 2024 +0100
+  #
+  #    remove dead link from readme
 in
 
 pkgs.mkShell {

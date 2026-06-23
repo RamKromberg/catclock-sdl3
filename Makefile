@@ -3,10 +3,10 @@ CC = gcc
 # Minimal Stage 4 Sokol Platform Detection Hooks
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    SOKOL_FLAGS = -DSOKOL_GLCORE
+    SOKOL_FLAGS = -DSOKOL_GLCORE33
     SYS_LIBS = -ldl
 else
-    SOKOL_FLAGS = -DSOKOL_GLCORE
+    SOKOL_FLAGS = -DSOKOL_GLCORE33
     SYS_LIBS = -ldl
 endif
 
