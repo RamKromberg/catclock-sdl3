@@ -254,6 +254,29 @@ int main(int argc, char* argv[]) {
 				}
 				SDL_RenderPresent(renderer);
 /*
+Dumps single frame.
+Use with sweep_phases.sh.
+*/
+#ifdef CATCLOCK_SHOT
+				// PACING DELAY: Slow down execution to prevent the renderer from skipping frames
+				SDL_Delay(5);
+
+				if (ctx.current_frame_step >= 120) {
+					SDL_Surface* screen_surf = SDL_RenderReadPixels(renderer, NULL);
+					if (screen_surf) {
+						SDL_Surface* final_rgba
+							= SDL_ConvertSurface(screen_surf, SDL_PIXELFORMAT_RGBA32);
+						if (final_rgba) {
+							SDL_SavePNG(final_rgba, "catclock_shot_target_raw.png");
+							SDL_DestroySurface(final_rgba);
+						}
+						SDL_DestroySurface(screen_surf);
+					}
+					exit(0);
+				}
+#endif
+
+/*
 Dumps Frames.
 Use with sweep_cycle.sh.
 */

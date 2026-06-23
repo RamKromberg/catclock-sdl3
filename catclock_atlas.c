@@ -251,50 +251,6 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_x, int cell_y,
 	}
 }
 
-#ifdef CATCLOCK_SHOT
-// Clean duplication of the diagnostic dumper stripped of real-time wall-clock uptime limits
-void CatClock_DiagnosticShotDump(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
-	if (!renderer || !atlas || !atlas->index_buffer)
-		return;
-
-	static int multi_frame_sequence_counter = 0;
-
-	// Execute exclusively on frame tick 60 to sample a stable cycle snapshot
-	if (multi_frame_sequence_counter == 60) {
-		SDL_Log(
-			"=== [DIAGNOSTIC DUMP] Writing raw 8-bit memory canvas layout straight to disk ===");
-
-		// Instantiate a dedicated target surface using standard 32-bit pixel layout format
-		SDL_Surface* surface
-			= SDL_CreateSurface(atlas->atlas_w, atlas->atlas_h, SDL_PIXELFORMAT_RGBA8888);
-		if (surface) {
-			uint32_t* pixels = (uint32_t*) surface->pixels;
-
-			// Translate raw index array data into explicit colors for the diagnostic capture
-			for (int i = 0; i < atlas->atlas_w * atlas->atlas_h; i++) {
-				uint8_t pal_idx = atlas->index_buffer[i];
-				if (pal_idx == PALETTE_CAT_BODY) {
-					pixels[i] = 0x000000FF; // True deep black for the cat pendulum geometry
-				} else if (pal_idx == PALETTE_SCLERA) {
-					pixels[i] = 0xFFFFFFFF; // Pure white for tracking halo outlines
-				} else {
-					pixels[i] = 0x0000FFFF; // Solid high-contrast background mask
-				}
-			}
-
-			char filename_buffer[256];
-			snprintf(filename_buffer, sizeof(filename_buffer), "catclock_shot_target_raw.png");
-
-			SDL_SavePNG(surface, filename_buffer);
-			SDL_Log("=== [DIAGNOSTIC DUMP] Finished writing memory map to: %s ===",
-					filename_buffer);
-			SDL_DestroySurface(surface);
-		}
-	}
-	multi_frame_sequence_counter++;
-}
-#endif
-
 #ifdef CATCLOCK_TELEMETRY
 void CatClock_TelemetryBegin(CatClock_TelemetryFence* fence) {
 	if (!fence)
@@ -567,18 +523,6 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 #ifdef CATCLOCK_TELEMETRY
 	CatClock_TelemetryEnd(&ctx->metrics.clock_hands, ctx->metrics.logging_frequency,
 						  "SHUFFLE_CLOCK_HANDS");
-#endif
-
-#ifdef CATCLOCK_SHOT
-	if (ctx->tail_atlas.texture) {
-		CatClock_DiagnosticShotDump(renderer, &ctx->tail_atlas);
-	}
-#endif
-
-#ifdef CATCLOCK_SHOT
-	if (ctx->tail_atlas.texture) {
-		CatClock_DiagnosticShotDump(renderer, &ctx->tail_atlas);
-	}
 #endif
 
 	SDL_SetRenderTarget(renderer, old_target);
