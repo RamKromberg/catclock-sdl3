@@ -1,5 +1,5 @@
 /******************************************************************************
- * File Name:    catclock_tail.h
+ * File Name:    catclock_tail.c
  * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
  *
  * Authorship & Collaboration:
@@ -16,23 +16,30 @@
 
 #include "catclock_shared.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #define RING_SEGMENTS 36
 #define CAP_SEGMENTS 17
 
-void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
+void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, float atlas_w_f,
 						 int frame_idx, void* userdata) {
-	uint8_t* buffer = (uint8_t*) renderer;
+	uint8_t* buffer = target_buffer;
 	int atlas_w = (int) atlas_w_f;
 
-	// Dynamically resolve total vertical dimensions to protect clipping passes
+// Diagnosing raw dimensions to capture unrounded/fractional workspace configurations
+#ifdef CATCLOCK_DIAGNOSTIC
+	if (ctx.current_frame_step % 60 == 0) {
+		printf("[DIAG TAIL_INPUT] cell_x: %d, cell_y: %d, atlas_w_f: %f, frame_idx: %d\n", cell_x,
+			   cell_y, atlas_w_f, frame_idx);
+	}
+#endif
+
 	int cols = 8;
 	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
 	int total_frames = total_fps_frames * 2;
 	int rows = (total_frames + cols - 1) / cols;
 
-	// FIX THE SCALE BUG: Derive actual scaled cell height from the horizontal sheet stride
 	int scaled_cell_h = atlas_w / cols;
 	int atlas_h = rows * scaled_cell_h;
 
@@ -77,7 +84,6 @@ void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_x, int cell_y, float a
 	float loop_center_y = stem_end_y;
 
 	float cap_center_x = loop_center_x + ((outer_radius + inner_radius) / 2.0f);
-	// Shift only the vertical position downward to overlap the straight rod cleanly
 	float cap_center_y = loop_center_y - capsule_length_stretch + seam_pad;
 	float cap_radius = (outer_radius - inner_radius) / 2.0f;
 

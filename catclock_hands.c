@@ -52,8 +52,8 @@
 extern void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
 								 int width, int height, uint8_t color_idx);
 
-void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
-						  int frame_idx, void* userdata) {
+void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
+						  void* userdata) {
 	/* Cast the renderer context address straight to our headless 8-bit tracking plane */
 	uint8_t* buffer = (uint8_t*) renderer;
 	int atlas_w = (int) atlas_w_f;

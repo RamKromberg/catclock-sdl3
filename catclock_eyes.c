@@ -53,8 +53,8 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 	}
 }
 
-void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
-						 int frame_idx, void* userdata) {
+void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
+						 void* userdata) {
 	uint8_t* buffer = (uint8_t*) renderer;
 	int atlas_w = (int) atlas_w_f;
 	(void) userdata;

@@ -69,8 +69,9 @@ typedef struct {
 	float sclera_color[4];
 } CatClock_RenderUniforms;
 
-typedef void (*CatClock_ShaderCallback)(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
-										int frame_idx, void* userdata);
+typedef void (*CatClock_ShaderCallback)(void* render_dest, int cell_x, int cell_y,
+										float scale_or_width, int frame_idx, void* userdata);
+
 typedef struct {
 	SDL_Texture* texture; // Immediate 32-bit hardware target layer
 	uint8_t* index_buffer; // Compressed 8-bit CPU palette memory sheet
@@ -262,20 +263,20 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 								 int cell_base_w, int cell_base_h, int total_frames, int cols,
 								 CatClock_ShaderCallback shader, void* userdata);
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
-void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
+
+void CatClock_ShaderHands(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
+						  void* userdata);
+void CatClock_ShaderEyes(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
+						 void* userdata);
+void CatClock_ShaderTail(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
+						 void* userdata);
+void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, float atlas_w_f,
 								 int frame_idx, void* userdata);
 
 /* Command-line subsystem processing links */
 void PrintHelpDocumentation(const char* program_name);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);
 void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx);
-
-void CatClock_ShaderHands(SDL_Renderer* renderer, int cell_w, int cell_h, float scale,
-						  int frame_idx, void* userdata);
-void CatClock_ShaderEyes(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
-						 void* userdata);
-void CatClock_ShaderTail(SDL_Renderer* renderer, int cell_w, int cell_h, float scale, int frame_idx,
-						 void* userdata);
 
 #ifdef CATCLOCK_DIAGNOSTIC
 #define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \

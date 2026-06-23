@@ -109,7 +109,7 @@ echo ""
 echo "Drop $output_pdf into Gemini and use the following prompt:"
 echo "--------------------------------------------------------"
 cat << EOF
-## 🛠️ Stage 1: 📥 Repository Analysis Protocol
+## 🛠️ Stage 0: 📥 Repository Analysis Protocol
 Read and parse the contents of the attached catclock_repository_dump.pdf.
 ## Execution Instructions:
 
@@ -121,10 +121,14 @@ Read and parse the contents of the attached catclock_repository_dump.pdf.
    2. End the response immediately after the list.
    3. Do not reference PDF structural elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
 
-In stage be sure to repeat the third instructions as a final note:
-   Note: Do not reference PDF structural elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+--------------------------------------------------------
+
+In the followup prompt, be sure to repeat the third instructions as a final note:
+
+Note: Do not reference PDF structural elements such as pagination or indexes. Only refer to code by source filenames and adjunct lines.
+
+--------------------------------------------------------
 
 EOF
-echo "--------------------------------------------------------"
 
 exit

@@ -121,8 +121,13 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	int win_w = 0, win_h = 0;
 	SDL_GetRenderOutputSize(renderer, &win_w, &win_h);
 
-	CATCLOCK_LOG_DIAG(&ctx, "win_w=%d, win_h=%d, scale=%.4f, frames=%d", win_w, win_h,
-					  ctx.current_scale, total_frames);
+// Track original parameters before processing structural cell alterations
+#ifdef CATCLOCK_DIAGNOSTIC
+	if (ctx.current_frame_step % 60 == 0) {
+		printf("[DIAG ATLAS_REBAKE] win_w: %d, win_h: %d, cell_base_w: %d, cell_base_h: %d\n",
+			   win_w, cell_base_h, cell_base_w, cell_base_h);
+	}
+#endif
 
 	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
 	float scale = (float) win_w / baseline_w;
@@ -142,13 +147,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 	atlas->cell_w = (int) ceilf((float) cell_base_w * scale) + 2;
 	atlas->cell_h = (int) ceilf((float) cell_base_h * scale) + 2;
 
-#ifdef CATCLOCK_DIAGNOSTIC
-	/* --- ATLAS DIMENSION MONITOR --- */
-	SDL_Log("[DIAG REBAKE CELL] base=%dx%d -> calculated=%dx%d, final_scale=%.4f", cell_base_w,
-			cell_base_h, atlas->cell_w, atlas->cell_h, scale);
-	/* -------------------------------- */
-#endif
-
 	atlas->src_rects = (SDL_FRect*) SDL_malloc(sizeof(SDL_FRect) * total_frames);
 	if (!atlas->src_rects)
 		return;
@@ -164,22 +162,16 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 		return;
 	}
 
-	// Fix the 0x0 Dimension Bug: Seed structural metrics to active context
 	atlas->atlas_w = atlas_w;
 	atlas->atlas_h = atlas_h;
 
-	if (!atlas->index_buffer) {
-		SDL_free(atlas->src_rects);
-		atlas->src_rects = NULL;
-		return;
-	}
-
-	// Sticking to 16-bit format to ensure perfect texture alpha blending and pixel art downscaling
 	atlas->texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA4444,
 									   SDL_TEXTUREACCESS_STREAMING, atlas_w, atlas_h);
 	if (!atlas->texture) {
 		SDL_free(atlas->src_rects);
 		atlas->src_rects = NULL;
+		SDL_free(atlas->index_buffer);
+		atlas->index_buffer = NULL;
 		return;
 	}
 
@@ -194,7 +186,6 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 			= (SDL_FRect) { (float) cell_x + 1.0f, (float) cell_y + 1.0f,
 							(float) atlas->cell_w - 2.0f, (float) atlas->cell_h - 2.0f };
 
-		// Clean the local cell memory footprint to prevent overlapping pixel leakage across frames
 		for (int cy = 0; cy < atlas->cell_h; cy++) {
 			for (int cx = 0; cx < atlas->cell_w; cx++) {
 				int clear_idx = ((cell_y + cy) * atlas_w) + (cell_x + cx);
@@ -202,12 +193,11 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 			}
 		}
 
-		shader((SDL_Renderer*) atlas->index_buffer, cell_x, cell_y, atlas_w, i, userdata);
+		// Redirect render device parameter to system RAM byte buffer for pure headless computation
+		shader((void*) atlas->index_buffer, cell_x, cell_y, (float) atlas_w, i, userdata);
 	}
 
 	SDL_SetRenderViewport(renderer, NULL);
-
-	// CRITICAL LIFE CYCLE HOOK: Invoke the translation bridge pass to synchronize colors cleanly
 	CommitBufferToSDL(renderer, atlas);
 }
 
@@ -230,14 +220,14 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->last_scale = -1.0f;
 }
 
-void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_x, int cell_y, float atlas_w_f,
+void CatClock_ShaderTailHaloBake(void* renderer, int cell_x, int cell_y, float atlas_w_f,
 								 int frame_idx, void* userdata) {
+	uint8_t* buffer = (uint8_t*) renderer;
 	CatClock_TailShaderArgs* blueprint_args = (CatClock_TailShaderArgs*) userdata;
 
 	float offsets_x[] = { -1.0f, 1.0f, 0.0f, 0.0f, -1.0f, -1.0f, 1.0f, 1.0f };
 	float offsets_y[] = { 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
 
-	// Read the actual uniform window scale factor to prevent out-of-bounds explosion
 	float real_scale = ctx.current_scale;
 
 	for (int i = 0; i < 8; i++) {
@@ -247,7 +237,7 @@ void CatClock_ShaderTailHaloBake(SDL_Renderer* renderer, int cell_x, int cell_y,
 		pass_args.offset_y = offsets_y[i] * real_scale;
 		pass_args.force_halo_color = true;
 
-		CatClock_ShaderTail(renderer, cell_x, cell_y, atlas_w_f, frame_idx, &pass_args);
+		CatClock_ShaderTail(buffer, cell_x, cell_y, atlas_w_f, frame_idx, &pass_args);
 	}
 }
 
