@@ -15,6 +15,10 @@
  *****************************************************************************/
 
 // clang-format off
+#define SOKOL_IMPL
+#include "sokol_gfx.h"
+#include "sokol_log.h"
+
 #include "catclock_shared.h"
 #include "catclock_atlas.h"
 // clang-format on
@@ -139,6 +143,23 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
+
+	// -------------------------------------------------------------------------
+	// Stage 4: Bootstrap Native Sokol GFX Subsystem in Background Validation
+	// -------------------------------------------------------------------------
+	sg_desc sokol_description = {
+		.logger.func = slog_func // Links the low-overhead helper logging config
+	};
+	sg_setup(&sokol_description);
+
+	if (sg_isvalid()) {
+		SDL_Log("[SOKOL BOOTSTRAP] Hardware graphics subsystem initialized successfully in "
+				"parallel loop.");
+	} else {
+		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+					"[SOKOL ERROR] Failed to bind background GPU context.");
+	}
+	// -------------------------------------------------------------------------
 
 	SDL_GetRenderOutputSize(renderer, &ctx.current_win_w, &ctx.current_win_h);
 	ctx.xbm_lib = CatClock_InitXbmLibrary(renderer);
@@ -352,6 +373,10 @@ Use with sweep_cycle.sh.
 	}
 
 	CatClock_DestroyXbmLibrary(ctx.xbm_lib);
+
+	// Shutdown the parallel background graphics framework securely
+	sg_shutdown();
+
 	SDL_DestroyRenderer(renderer);
 	SDL_DestroyWindow(window);
 	SDL_Quit();

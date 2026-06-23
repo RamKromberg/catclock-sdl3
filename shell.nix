@@ -2,7 +2,16 @@
 
 let
   windowsPkgs = pkgs.pkgsCross.mingwW64;
+  
+  # Tracks the specified Sokol master revision commit
+  srcSokol = pkgs.fetchFromGitHub {
+    owner = "floooh";
+    repo = "sokol";
+    rev = "28f9d8d44d92dab8536791a9f7d13d7e911a2b39";
+    sha256 = "sha256-2KdUPf0ceUeh8Fd+VDoOdJKmE6ZjjZnW8S5apDxniDk=";
+  };
 in
+
 pkgs.mkShell {
   nativeBuildInputs = with pkgs; [
     pkg-config
@@ -22,6 +31,10 @@ pkgs.mkShell {
     #nvtopPackages.full
     #intel-gpu-tools
     #amdgpu_top
+    #sokol needs:
+    libGL.dev
+    libx11.dev
+    wayland.dev
   ];
 
   buildInputs = [
@@ -39,9 +52,22 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:40:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:40:00" xclock
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
+    
+    # Create atomic soft symbolic targets for compiler search routes
+    if [ ! -d "./sokol" ]; then
+      ln -sfn "${srcSokol}" ./sokol
+    fi
+    if [ ! -f "sokol_gfx.h" ]; then
+      ln -sfn ./sokol/sokol_gfx.h ./sokol_gfx.h
+    fi
+    if [ ! -f "sokol_log.h" ]; then
+      ln -sfn ./sokol/sokol_log.h ./sokol_log.h
+    fi
+
     if [ -d .git ]; then
         git config core.pager "less -x4"
     fi
+    export NIX_CFLAGS_COMPILE="-I${pkgs.libGL.dev}/include -I${pkgs.libx11.dev}/include $NIX_CFLAGS_COMPILE"
 
     export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
 

@@ -14,6 +14,9 @@ trap 'rm -f "$tmp_payload" "$tmp_text_blocks" "$tmp_pdf_body" "$tmp_uncompressed
 
 # 1. Build a tight, text-only concatenated payload with no padding zeros
 for file in $file_targets; do
+    if [[ "$file" == *"sokol"* ]]; then
+        continue
+    fi
     if [ -f "$file" ]; then
         printf "===FILE:%s===\n" "$file" >> "$tmp_payload"
         cat "$file" >> "$tmp_payload"

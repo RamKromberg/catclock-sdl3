@@ -1,6 +1,17 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -O2 $(shell pkg-config --cflags sdl3)
-LIBS = $(shell pkg-config --libs sdl3) -lm
+
+# Minimal Stage 4 Sokol Platform Detection Hooks
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+    SOKOL_FLAGS = -DSOKOL_GLCORE
+    SYS_LIBS = -ldl
+else
+    SOKOL_FLAGS = -DSOKOL_GLCORE
+    SYS_LIBS = -ldl
+endif
+
+CFLAGS = -Wall -Wextra -O2 $(SOKOL_FLAGS) $(shell pkg-config --cflags sdl3)
+LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
 
 TARGET = catclock-sdl3
 SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
@@ -8,15 +19,13 @@ HEADERS = catclock_atlas.h catclock_shared.h catclock_xbm.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 
-# Windows Cross-Compiler Target Directives
+# Windows MinGW Cross-Compiler Targets
 WIN_CC = x86_64-w64-mingw32-gcc
 WIN_WINDRES = x86_64-w64-mingw32-windres
 WIN_TARGET = catclock-sdl3.exe
-
-# Base Windows compiler flags and libraries
-WIN_LIBS = catclock-sdl3_resource.o -L$(WINDOWS_SDL_PREFIX)/lib -lSDL3 -lm -mwindows
-WIN_RESOURCES = catclock-sdl3_resource.o
-WIN_CFLAGS = -Wall -Wextra -O2 -I$(WINDOWS_SDL_PREFIX)/include
+WIN_SOKOL_FLAGS = -DSOKOL_D3D11
+WIN_LIBS = catclock-sdl3_resource.o -L$(WINDOWS_SDL_PREFIX)/lib -lSDL3 -lm -mwindows -ld3d11 -ldxgi
+WIN_CFLAGS = -Wall -Wextra -O2 $(WIN_SOKOL_FLAGS) -I$(WINDOWS_SDL_PREFIX)/include
 
 # Verified official stable upstream production release asset variables
 SDL_VER = 3.4.10

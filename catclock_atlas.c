@@ -49,6 +49,7 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
 /**
  * CommitBufferToSDL
  * High-Performance Direct VRAM Lock-and-Blit 8-to-32-bit Semantic Palette Expansion
+ * Updated: Enforces explicit row-stride pitch constraints and standard RGBA bit packing.
  */
 void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
 	if (!atlas || !atlas->texture || !atlas->index_buffer) {
@@ -65,50 +66,59 @@ void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
 		return;
 	}
 
-	Uint32* dst_pixels = (Uint32*) pixels;
-	int total_pixels = atlas->atlas_w * atlas->atlas_h;
+	int width = atlas->atlas_w;
+	int height = atlas->atlas_h;
+	Uint8* src_buf = atlas->index_buffer;
 
-	// Sequential flat memory stride traversal pass
-	for (int i = 0; i < total_pixels; i++) {
-		Uint8 pal_idx = atlas->index_buffer[i];
-		SDL_Color color = { 0, 0, 0, 0 };
+	// Explicit double loop preventing vertical skewing across hardware stride boundaries
+	for (int y = 0; y < height; y++) {
+		// Calculate the precise destination pointer using the runtime byte pitch
+		Uint32* dst_row = (Uint32*) ((Uint8*) pixels + (y * pitch));
+		int row_offset = y * width;
 
-		// Ultra-fast switch palette mapping look-up block
-		switch (pal_idx) {
-		case PALETTE_TRANSPARENT:
-			dst_pixels[i] = 0x00000000; // Fully Clear Space
-			continue;
-		case PALETTE_CAT_BODY:
-			color = ctx.cat_color;
-			break;
-		case PALETTE_SCLERA:
-			color = ctx.sclera_color;
-			break;
-		case PALETTE_PUPIL:
-			color = ctx.pupil_color;
-			break;
-		case PALETTE_HAND_HOUR:
-			color = ctx.hour_color;
-			break;
-		case PALETTE_HAND_MINUTE:
-			color = ctx.minute_color;
-			break;
-		case PALETTE_HAND_SECOND:
-			color = ctx.second_color;
-			break;
-		case PALETTE_NECKTIE:
-			color = ctx.tie_color;
-			break;
-		case PALETTE_HALO:
-			color = ctx.detail_color;
-			break;
-		default:
-			dst_pixels[i] = 0x00000000;
-			continue;
+		for (int x = 0; x < width; x++) {
+			Uint8 pal_idx = src_buf[row_offset + x];
+			SDL_Color color = { 0, 0, 0, 0 };
+
+			// Ultra-fast switch palette mapping look-up block
+			switch (pal_idx) {
+			case PALETTE_TRANSPARENT:
+				dst_row[x] = 0x00000000; // Fully Clear Space
+				continue;
+			case PALETTE_CAT_BODY:
+				color = ctx.cat_color;
+				break;
+			case PALETTE_SCLERA:
+				color = ctx.sclera_color;
+				break;
+			case PALETTE_PUPIL:
+				color = ctx.pupil_color;
+				break;
+			case PALETTE_HAND_HOUR:
+				color = ctx.hour_color;
+				break;
+			case PALETTE_HAND_MINUTE:
+				color = ctx.minute_color;
+				break;
+			case PALETTE_HAND_SECOND:
+				color = ctx.second_color;
+				break;
+			case PALETTE_NECKTIE:
+				color = ctx.tie_color;
+				break;
+			case PALETTE_HALO:
+				color = ctx.detail_color;
+				break;
+			default:
+				dst_row[x] = 0x00000000;
+				continue;
+			}
+
+			// Map runtime color channels straight to uniform unswizzled 32-bit integer layouts
+			// This matches standard SG_PIXELFORMAT_RGBA8 parsing logic on modern hardware contexts
+			dst_row[x] = ((Uint32) color.r) | ((Uint32) color.g << 8) | ((Uint32) color.b << 16)
+				| ((Uint32) color.a << 24);
 		}
-
-		// Map runtime RGBA struct components directly to 32-bit destination layout integers
-		dst_pixels[i] = (color.a << 24) | (color.b << 16) | (color.g << 8) | color.r;
 	}
 
 	SDL_UnlockTexture(atlas->texture);
