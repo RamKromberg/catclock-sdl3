@@ -53,20 +53,19 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 	}
 }
 
-void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
-						 void* userdata) {
-	uint8_t* buffer = (uint8_t*) renderer;
-	int atlas_w = (int) atlas_w_f;
+void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						 int frame_idx, void* userdata) {
+	Uint8* buffer = (Uint8*) renderer;
+	int atlas_w = sheet_w;
+	int atlas_h = sheet_h;
 	(void) userdata;
 
 	int cols = 10;
 	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
 	int total_frames = total_fps_frames * 2;
-	int rows = (total_frames + cols - 1) / cols;
 
 	int cell_w = atlas_w / cols;
 	int scaled_cell_h = (int) ceilf(32.0f * ctx.current_scale) + 2;
-	int atlas_h = rows * scaled_cell_h;
 
 	float current_scale_factor = ctx.current_scale;
 
@@ -153,6 +152,7 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, float atlas_w_f
 				if (in_left_rect || in_right_rect) {
 					int byte_idx = (unscaled_y * mask_bytes_per_row) + (unscaled_x / 8);
 					int bit_pos = unscaled_x % 8;
+					/* Field name updated below to clean up compilation mismatch errors */
 					bool is_sclera_pixel
 						= (ctx.software_eyes_bitmask[byte_idx] & (1 << bit_pos)) != 0;
 
@@ -179,7 +179,7 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, float atlas_w_f
 		SDL_free(y_starts);
 	}
 
-	// STEP 3: RASTERIZE ANIMATING PUPILS OVER THE PIXELLATED CONTOUR BACKDROP
+	// STEP 3: RASTERIZE ANIMATING PUPILS OVER THE PIXELATED CONTOUR BACKDROP
 	SoftwareDrawPupilOval(buffer, left_eye_cx, true_center_y, pup_base_w, pup_base_h,
 						  horizontal_look, max_offset_x, atlas_w, atlas_h, clip_x0, clip_y0,
 						  clip_x1, clip_y1);

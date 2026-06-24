@@ -52,7 +52,8 @@ $(TARGET): $(OBJS)
 
 # Deterministic source formatting utility target
 format:
-	clang-format -i $(SRCS) $(HEADERS)
+	#clang-format -i $(SRCS) $(HEADERS)
+	clang-format -i catclock_*.c catclock_*.h
 
 # AUTOMATED ASSET BAKE OPTION FOR ROADMAP REPRODUCIBILITY
 # === FILE: Makefile === Update the asset target block cleanly
@@ -161,7 +162,7 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 	@echo "========================================================================="
 
 clean:
-	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png catclock-sdl3_resource.o
+	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png *.pgm catclock-sdl3_resource.o
 	rm -f resource.rc catclock_icon.ico
 
 clean-dist: clean

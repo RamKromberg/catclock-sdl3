@@ -1,228 +1,155 @@
-/******************************************************************************
- * File Name:    catclock_assets.c
- * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
- *
- * Authorship & Collaboration:
- *   - Developed in collaborative partnership between the User and Google Gemini AI.
- *   - Core engine optimization, refactoring architecture, and porting logic
- *     engineered jointly to achieve production-grade performance.
- *
- * Attribution & Legacy:
- *   - Inspired by the classic X11/Motif 'catclock' original program.
- *   - XBM Graphic Assets derived from the historical open-source X11 layout.
- *
- * License: Open Source / Educational - Preserve attribution upon redistribution.
- *****************************************************************************/
-
-// clang-format off
 #include "catclock_shared.h"
-#include "catclock_xbm.h"
-// clang-format on
-#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-	SDL_Texture* texture;
-	int w;
-	int h;
-	char layer_name[64];
-} AssetNode;
-
 struct CatClock_XbmLibrary {
-	AssetNode catbackground;
-	AssetNode catoutline;
-	AssetNode necktie;
-	AssetNode eyesocket;
+	Uint8* catback_bits;
+	int catback_w, catback_h;
+	Uint8* catwhite_bits;
+	int catwhite_w, catwhite_h;
+	Uint8* tie_body_bits;
+	int tie_body_w, tie_body_h;
+	Uint8* tie_line_bits;
+	int tie_line_w, tie_line_h;
+	Uint8* hitbox_bits;
+	int hitbox_w, hitbox_h;
+	Uint8* eyes_bits;
+	int eyes_w, eyes_h;
 };
 
-static void InitAssetNode(SDL_Renderer* renderer, AssetNode* node, const char* filepath,
-						  const char* name, SDL_Color color, bool invert, bool as_color_mask) {
-	if (!node || !filepath || !name)
-		return;
-	// Forward the flag cleanly to the updated inline header utility function
-	node->texture = XbmUtil_LoadToRGBA4444(renderer, filepath, color, invert, as_color_mask);
-	if (node->texture) {
-		float w, h;
-		SDL_GetTextureSize(node->texture, &w, &h);
-		node->w = (int) w;
-		node->h = (int) h;
-	}
-	SDL_strlcpy(node->layer_name, name, sizeof(node->layer_name));
-}
+void CatClock_DebugPrintXbmToTerminal(const char* label, const Uint8* bits, int w, int h);
 
 CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
+	(void) renderer;
 	CatClock_XbmLibrary* lib = (CatClock_XbmLibrary*) SDL_calloc(1, sizeof(CatClock_XbmLibrary));
 	if (!lib)
 		return NULL;
 
-	SDL_Color color_base = { 255, 255, 255, 255 };
+	/* 1. Core Background Character Outlines & Fill Splines */
+	lib->catback_bits
+		= CatClock_LoadRawXbmBits("./assets/catback.xbm", &lib->catback_w, &lib->catback_h);
+	lib->catwhite_bits
+		= CatClock_LoadRawXbmBits("./assets/catwhite.xbm", &lib->catwhite_w, &lib->catwhite_h);
 
-	InitAssetNode(renderer, &lib->catbackground, "./assets/catback.xbm", "catback", color_base,
-				  false, false);
-	InitAssetNode(renderer, &lib->catoutline, "./assets/catwhite.xbm", "catwhite", color_base,
-				  false, false);
+	/* 2. Centralized Pupil Clipping Mask Configuration */
+	lib->eyes_bits = CatClock_LoadRawXbmBits("./assets/eyes.xbm", &lib->eyes_w, &lib->eyes_h);
 
-	InitAssetNode(renderer, &lib->necktie, "./assets/cattie.xbm", "cattie", ctx.tie_color, false,
-				  true);
+	/* 3. Centralized High-Performance Input Boundary Mask Configuration */
+	printf("[Trace] Loading hitbox...\n");
+	lib->hitbox_bits
+		= CatClock_LoadRawXbmBits("./assets/hitbox.xbm", &lib->hitbox_w, &lib->hitbox_h);
+	if (!lib->hitbox_bits) {
+		printf("[Warning] Failed to load hitbox map. Full window drag fallback enabled.\n");
+	}
 
-	InitAssetNode(renderer, &lib->eyesocket, "./assets/eyes.xbm", "eyes", color_base, false, false);
+	/* 4. Pre-process the necktie asset to split body fill spaces from structural lines */
+	int raw_tie_w = 0, raw_tie_h = 0;
+	Uint8* raw_tie_bits = CatClock_LoadRawXbmBits("./assets/cattie.xbm", &raw_tie_w, &raw_tie_h);
 
-	// Seed plain C software arrays into system RAM to enable seamless software masking
-	ctx.software_eyes_bitmask
-		= CatClock_LoadRawXbmBits("./assets/eyes.xbm", &ctx.software_mask_w, &ctx.software_mask_h);
+	if (raw_tie_bits) {
+		int total_bytes = ((raw_tie_w + 7) / 8) * raw_tie_h;
+		lib->tie_body_bits = (Uint8*) SDL_calloc(1, total_bytes);
+		lib->tie_line_bits = (Uint8*) SDL_calloc(1, total_bytes);
+		lib->tie_body_w = lib->tie_line_w = raw_tie_w;
+		lib->tie_body_h = lib->tie_line_h = raw_tie_h;
 
+		for (int i = 0; i < total_bytes; i++) {
+			Uint8 raw_byte = raw_tie_bits[i];
+			/* Split bits based on fill properties */
+			lib->tie_line_bits[i] = raw_byte;
+			lib->tie_body_bits[i] = ~raw_byte;
+		}
+		SDL_free(raw_tie_bits);
+	}
 	return lib;
 }
 
-void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* renderer,
-								   const char* layer_id, SDL_Color color, float offset_x,
-								   float offset_y) {
-	if (!lib || !renderer || !layer_id)
+void CatClock_GetCatbackData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
 		return;
-
-	AssetNode* target = NULL;
-	if (SDL_strcmp(layer_id, "catback") == 0)
-		target = &lib->catbackground;
-	else if (SDL_strcmp(layer_id, "catwhite") == 0)
-		target = &lib->catoutline;
-	else if (SDL_strcmp(layer_id, "cattie") == 0)
-		target = &lib->necktie;
-	else if (SDL_strcmp(layer_id, "eyes") == 0)
-		target = &lib->eyesocket;
-
-	if (target && target->texture) {
-		SDL_FRect dst;
-		float runtime_scale = ctx.current_scale;
-
-		if (SDL_strcmp(layer_id, "eyes") == 0) {
-			dst.x = floorf((20.0f + offset_x) * runtime_scale);
-			dst.y = floorf((16.0f + offset_y) * runtime_scale);
-			dst.w = (float) target->w * runtime_scale;
-			dst.h = (float) target->h * runtime_scale;
-
-			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
-			SDL_SetTextureAlphaMod(target->texture, color.a);
-			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
-		} else if (SDL_strcmp(layer_id, "cattie") == 0) {
-			// Establish rendering bounds matching the necktie dimension metrics
-			dst.x = floorf((9.0f + offset_x) * runtime_scale);
-			dst.y = floorf((75.0f + offset_y) * runtime_scale);
-			dst.w = (float) target->w * runtime_scale;
-			dst.h = (float) target->h * runtime_scale;
-
-			// PASS 1: Blit the background cat body slice first
-			if (lib->catbackground.texture) {
-				SDL_FRect back_src = { 9.0f, 75.0f, (float) target->w, (float) target->h };
-
-				SDL_SetTextureColorMod(lib->catbackground.texture, ctx.cat_color.r, ctx.cat_color.g,
-									   ctx.cat_color.b);
-				SDL_SetTextureAlphaMod(lib->catbackground.texture, 255);
-				SDL_SetTextureBlendMode(lib->catbackground.texture, SDL_BLENDMODE_BLEND);
-				SDL_RenderTexture(renderer, lib->catbackground.texture, &back_src, &dst);
-			}
-
-			// PASS 2: Tint selection using standard alpha blending
-			// Instead of standard modulation over transparency, use standard source alpha blending
-			// This forces transparent pixels (0x0000) to safely discard color values on the edges
-			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
-			SDL_SetTextureAlphaMod(target->texture, color.a);
-			SDL_SetTextureBlendMode(target->texture, SDL_BLENDMODE_BLEND);
-			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
-			return;
-		} else {
-			dst.x = floorf(offset_x * runtime_scale);
-			dst.y = floorf(offset_y * runtime_scale);
-			dst.w = ceilf(BASELINE_CANVAS_W * runtime_scale);
-			dst.h = ceilf(BASELINE_CANVAS_H * runtime_scale);
-
-			SDL_SetTextureColorMod(target->texture, color.r, color.g, color.b);
-			SDL_SetTextureAlphaMod(target->texture, color.a);
-			SDL_RenderTexture(renderer, target->texture, NULL, &dst);
-		}
 	}
+	*bits = lib->catback_bits;
+	*w = lib->catback_w;
+	*h = lib->catback_h;
 }
 
-void CatClock_RenderXbmLayer(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, const char* layer_id,
-							 SDL_Color color) {
-	float render_pad_x = ctx.use_decorations ? CHOP_OFFSET_X : 0.0f;
-	float render_pad_y = ctx.use_decorations ? CHOP_OFFSET_Y : 0.0f;
-	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
-
-	CatClock_RenderXbmLayerOffset(lib, renderer, layer_id, color, render_pad_x + visual_pad,
-								  render_pad_y + visual_pad);
+void CatClock_GetCatwhiteData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
+		return;
+	}
+	*bits = lib->catwhite_bits;
+	*w = lib->catwhite_w;
+	*h = lib->catwhite_h;
 }
 
-void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color) {
-	if (!lib || !renderer || !lib->catbackground.texture)
+void CatClock_GetCattieBodyData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
 		return;
-
-	SDL_BlendMode protective_halo_mode = SDL_ComposeCustomBlendMode(
-		SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, SDL_BLENDOPERATION_ADD,
-		SDL_BLENDFACTOR_ONE, SDL_BLENDFACTOR_ONE, SDL_BLENDOPERATION_ADD);
-
-	SDL_SetTextureBlendMode(lib->catbackground.texture, protective_halo_mode);
-	SDL_SetTextureColorMod(lib->catbackground.texture, color.r, color.g, color.b);
-	SDL_SetTextureAlphaMod(lib->catbackground.texture, color.a);
-
-	float render_pad_x = ctx.use_decorations ? CHOP_OFFSET_X : 0.0f;
-	float render_pad_y = ctx.use_decorations ? CHOP_OFFSET_Y : 0.0f;
-	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
-
-	float runtime_scale = ctx.current_scale;
-
-	for (float dx = -1.0f; dx <= 1.0f; dx += 1.0f) {
-		for (float dy = -1.0f; dy <= 1.0f; dy += 1.0f) {
-			if (dx == 0.0f && dy == 0.0f)
-				continue;
-
-			SDL_FRect dst
-				= { floorf((render_pad_x + visual_pad + dx) * runtime_scale),
-					floorf((render_pad_y + visual_pad + dy) * runtime_scale),
-					BASELINE_CANVAS_W * runtime_scale, BASELINE_CANVAS_H * runtime_scale };
-			SDL_RenderTexture(renderer, lib->catbackground.texture, NULL, &dst);
-		}
 	}
+	*bits = lib->tie_body_bits;
+	*w = lib->tie_body_w;
+	*h = lib->tie_body_h;
+}
 
-	SDL_SetTextureBlendMode(lib->catbackground.texture, SDL_BLENDMODE_BLEND);
+void CatClock_GetCattieLineData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
+		return;
+	}
+	*bits = lib->tie_line_bits;
+	*w = lib->tie_line_w;
+	*h = lib->tie_line_h;
+}
+
+void CatClock_GetHitboxData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
+		return;
+	}
+	*bits = lib->hitbox_bits;
+	*w = lib->hitbox_w;
+	*h = lib->hitbox_h;
+}
+
+void CatClock_GetEyesMaskData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h) {
+	if (!lib) {
+		*bits = NULL;
+		*w = 0;
+		*h = 0;
+		return;
+	}
+	*bits = lib->eyes_bits;
+	*w = lib->eyes_w;
+	*h = lib->eyes_h;
 }
 
 void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 	if (!lib)
 		return;
-	if (lib->catbackground.texture)
-		SDL_DestroyTexture(lib->catbackground.texture);
-	if (lib->catoutline.texture)
-		SDL_DestroyTexture(lib->catoutline.texture);
-	if (lib->necktie.texture)
-		SDL_DestroyTexture(lib->necktie.texture);
-	if (lib->eyesocket.texture)
-		SDL_DestroyTexture(lib->eyesocket.texture);
-	if (ctx.software_eyes_bitmask) {
-		SDL_free(ctx.software_eyes_bitmask);
-		ctx.software_eyes_bitmask = NULL;
-	}
+	SDL_free(lib->catback_bits);
+	SDL_free(lib->catwhite_bits);
+	SDL_free(lib->tie_body_bits);
+	SDL_free(lib->tie_line_bits);
+	SDL_free(lib->hitbox_bits);
+	SDL_free(lib->eyes_bits);
 	SDL_free(lib);
 }
 
-SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id) {
-	if (!lib || !layer_id)
-		return NULL;
-	if (SDL_strcmp(layer_id, "catback") == 0)
-		return lib->catbackground.texture;
-	if (SDL_strcmp(layer_id, "catwhite") == 0)
-		return lib->catoutline.texture;
-	if (SDL_strcmp(layer_id, "cattie") == 0)
-		return lib->necktie.texture;
-	if (SDL_strcmp(layer_id, "eyes") == 0)
-		return lib->eyesocket.texture;
-	return NULL;
-}
-
-/**
- * Stateless Monochrome XBM Core Parser Utility
- * Parses raw 1-bit text representations directly into contiguous system RAM buffers
- */
-uint8_t* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {
+Uint8* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {
 	if (!filepath || !out_w || !out_h)
 		return NULL;
 
@@ -272,7 +199,7 @@ uint8_t* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {
 
 	int bytes_per_row = (w + 7) / 8;
 	int total_bytes = bytes_per_row * h;
-	uint8_t* raw_bits = (uint8_t*) SDL_calloc(1, total_bytes);
+	Uint8* raw_bits = (Uint8*) SDL_calloc(1, total_bytes);
 	if (!raw_bits) {
 		SDL_free(buffer);
 		return NULL;
@@ -286,11 +213,68 @@ uint8_t* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {
 		}
 		if (*ptr == '}')
 			break;
-		raw_bits[i] = (uint8_t) SDL_strtol(ptr, &ptr, 16);
+		raw_bits[i] = (Uint8) SDL_strtol(ptr, &ptr, 16);
 	}
 
 	SDL_free(buffer);
 	*out_w = w;
 	*out_h = h;
 	return raw_bits;
+}
+
+void CatClock_RenderXbmLayer(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, const char* layer_id,
+							 SDL_Color color) {
+	(void) lib;
+	(void) renderer;
+	(void) layer_id;
+	(void) color;
+}
+void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* renderer,
+								   const char* layer_id, SDL_Color color, float offset_x,
+								   float offset_y) {
+	(void) lib;
+	(void) renderer;
+	(void) layer_id;
+	(void) color;
+	(void) offset_x;
+	(void) offset_y;
+}
+void CatClock_RenderHaloOutline(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, SDL_Color color) {
+	(void) lib;
+	(void) renderer;
+	(void) color;
+}
+SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* layer_id) {
+	(void) lib;
+	(void) layer_id;
+	return NULL;
+}
+void CatClock_DebugPrintXbmToTerminal(const char* label, const Uint8* bits, int w, int h) {
+	if (!bits || w <= 0 || h <= 0) {
+		printf("\n[XBM Debug] %s: Cannot print (Empty or NULL array)\n", label);
+		return;
+	}
+
+	printf("\n=== XBM TERMINAL PRINT: %s (%dx%d) ===\n", label, w, h);
+	int bytes_per_row = (w + 7) / 8;
+
+	for (int y = 0; y < h; y++) {
+		// Print line numbers on the left side as a visual scale track
+		printf("%03d | ", y);
+
+		for (int x = 0; x < w; x++) {
+			int byte_idx = (y * bytes_per_row) + (x / 8);
+			int bit_pos = x % 8;
+
+			// Check if the bit is flipped on (1-bit asset inverted check)
+			// In XBM, a 1-bit indicates foreground/ink, 0 indicates canvas
+			if ((bits[byte_idx] & (1 << bit_pos)) != 0) {
+				printf("██"); // Filled block character for solid ink
+			} else {
+				printf("  "); // Two spaces for empty canvas background
+			}
+		}
+		printf("\n");
+	}
+	printf("=============================================\n\n");
 }

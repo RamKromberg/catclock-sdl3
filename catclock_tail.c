@@ -22,37 +22,21 @@
 #define RING_SEGMENTS 36
 #define CAP_SEGMENTS 17
 
-void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, float atlas_w_f,
+void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						 int frame_idx, void* userdata) {
-	uint8_t* buffer = target_buffer;
-	int atlas_w = (int) atlas_w_f;
-
-// Diagnosing raw dimensions to capture unrounded/fractional workspace configurations
-#ifdef CATCLOCK_DIAGNOSTIC
-	if (ctx.current_frame_step % 60 == 0) {
-		printf("[DIAG TAIL_INPUT] cell_x: %d, cell_y: %d, atlas_w_f: %f, frame_idx: %d\n", cell_x,
-			   cell_y, atlas_w_f, frame_idx);
-	}
-#endif
-
-	int cols = 8;
-	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
-	int total_frames = total_fps_frames * 2;
-	int rows = (total_frames + cols - 1) / cols;
-
-	int scaled_cell_h = atlas_w / cols;
-	int atlas_h = rows * scaled_cell_h;
+	Uint8* buffer = (Uint8*) target_buffer;
+	if (!buffer || sheet_w <= 0 || sheet_h <= 0)
+		return;
 
 	CatClock_TailShaderArgs* args = (CatClock_TailShaderArgs*) userdata;
-
 	float shift_x = args ? args->offset_x : 0.0f;
 	float shift_y = args ? args->offset_y : 0.0f;
 
 	bool is_halo = args && args->force_halo_color;
-	uint8_t palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
+	Uint8 palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
 
-	float total_cycle_frames = (float) total_frames;
-	float progress = ((float) frame_idx + 0.5f) / total_cycle_frames;
+	int total_tail_frames = ctx.tail_atlas.total_frames > 0 ? ctx.tail_atlas.total_frames : 1;
+	float progress = ((float) frame_idx + 0.5f) / (float) total_tail_frames;
 	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
 
@@ -65,9 +49,10 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, float atla
 	float cos_a = cosf(rad);
 	float sin_a = sinf(rad);
 
-	float internal_unit_ratio = (float) (atlas_w / 8) / 96.0f;
+	/* Read scale multipliers directly from the active atlas structure properties */
+	float internal_unit_ratio = (float) ctx.tail_atlas.cell_w / 96.0f;
 	float pivot_x
-		= (float) cell_x + (((float) atlas_w / 8.0f) / 2.0f) - (1.0f * internal_unit_ratio);
+		= (float) cell_x + ((float) ctx.tail_atlas.cell_w / 2.0f) - (1.0f * internal_unit_ratio);
 	float pivot_y = (float) cell_y + (12.0f * internal_unit_ratio);
 
 	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;
@@ -100,76 +85,61 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, float atla
 	TRANSFORM_AND_PLOT(-half_width, stem_end_y, sx2, sy2);
 	TRANSFORM_AND_PLOT(half_width, stem_end_y, sx3, sy3);
 
-	FillSoftwareTriangle(buffer, sx0, sy0, sx1, sy1, sx2, sy2, atlas_w, atlas_h, palette_idx);
-	FillSoftwareTriangle(buffer, sx1, sy1, sx3, sy3, sx2, sy2, atlas_w, atlas_h, palette_idx);
+	FillSoftwareTriangle(buffer, sx0, sy0, sx1, sy1, sx2, sy2, sheet_w, sheet_h, palette_idx);
+	FillSoftwareTriangle(buffer, sx1, sy1, sx3, sy3, sx2, sy2, sheet_w, sheet_h, palette_idx);
 
-	// PART 2: THE CURVED BOTTOM RING HOOK
+	// PART 2: CURVED RING HOOK
 	int last_ox = 0, last_oy = 0, last_ix = 0, last_iy = 0;
-	for (int i = 0; i < RING_SEGMENTS; i++) {
-		float t = (float) i / (float) (RING_SEGMENTS - 1);
+	for (int i = 0; i < 36; i++) {
+		float t = (float) i / 35.0f;
 		float sweep_rad = (float) M_PI - (t * (float) M_PI);
 		float cos_s = cosf(sweep_rad);
 		float sin_s = sinf(sweep_rad);
 
 		float ox = loop_center_x + outer_radius * cos_s;
-		float oy = loop_center_y + outer_radius * sin_s;
+		float ox_y = loop_center_y + outer_radius * sin_s;
 		float ix = loop_center_x + inner_radius * cos_s;
-		float iy = loop_center_y + inner_radius * sin_s;
+		float ix_y = loop_center_y + inner_radius * sin_s;
 
-		if (i == 0 || i == RING_SEGMENTS - 1) {
-			oy = stem_end_y;
-			iy = stem_end_y;
+		if (i == 0 || i == 35) {
+			ox_y = stem_end_y;
+			ix_y = stem_end_y;
 		}
 
-		int p_ox, p_oy, p_ix, p_iy;
-		TRANSFORM_AND_PLOT(ox, oy, p_ox, p_oy);
-		TRANSFORM_AND_PLOT(ix, iy, p_ix, p_iy);
+		int px_ox, py_ox, px_ix, py_ix;
+		TRANSFORM_AND_PLOT(ox, ox_y, px_ox, py_ox);
+		TRANSFORM_AND_PLOT(ix, ix_y, px_ix, py_ix);
 
 		if (i > 0) {
-			FillSoftwareTriangle(buffer, last_ox, last_oy, last_ix, last_iy, p_ox, p_oy, atlas_w,
-								 atlas_h, palette_idx);
-			FillSoftwareTriangle(buffer, last_ix, last_iy, p_ix, p_iy, p_ox, p_oy, atlas_w, atlas_h,
-								 palette_idx);
+			FillSoftwareTriangle(buffer, last_ox, last_oy, px_ox, py_ox, last_ix, last_iy, sheet_w,
+								 sheet_h, palette_idx);
+			FillSoftwareTriangle(buffer, px_ox, py_ox, px_ix, py_ix, last_ix, last_iy, sheet_w,
+								 sheet_h, palette_idx);
 		}
-		last_ox = p_ox;
-		last_oy = p_oy;
-		last_ix = p_ix;
-		last_iy = p_iy;
+		last_ox = px_ox;
+		last_oy = py_ox;
+		last_ix = px_ix;
+		last_iy = py_ix;
 	}
 
-	// PART 3: THE ELONGATED STRAIGHT EXTENSION
-	int ex0, ey0, ex1, ey1;
-	TRANSFORM_AND_PLOT(loop_center_x + outer_radius, loop_center_y - capsule_length_stretch, ex0,
-					   ey0);
-	TRANSFORM_AND_PLOT(loop_center_x + inner_radius, loop_center_y - capsule_length_stretch, ex1,
-					   ey1);
+	// PART 3: TOP CAPSULE CLOSURE
+	int last_cx = 0, last_cy = 0;
+	for (int i = 0; i < 17; i++) {
+		float t = (float) i / 16.0f;
+		float sweep_rad = (float) M_PI + (t * (float) M_PI);
+		int px_cx, py_cy;
 
-	FillSoftwareTriangle(buffer, last_ox, last_oy, last_ix, last_iy, ex0, ey0, atlas_w, atlas_h,
-						 palette_idx);
-	FillSoftwareTriangle(buffer, last_ix, last_iy, ex1, ey1, ex0, ey0, atlas_w, atlas_h,
-						 palette_idx);
-
-	// PART 4: THE ROUNDED CAPSULE END-CAP TIP
-	int p_cap_cx, p_cap_cy;
-	TRANSFORM_AND_PLOT(cap_center_x, cap_center_y, p_cap_cx, p_cap_cy);
-
-	int last_cx = ex0, last_cy = ey0;
-	for (int i = 0; i < CAP_SEGMENTS; i++) {
-		float t = (float) i / (float) (CAP_SEGMENTS - 1);
-		float cap_arc_rad = t * (float) M_PI;
-		float cx = cap_center_x + cap_radius * cosf(cap_arc_rad);
-		float cy = cap_center_y - cap_radius * sinf(cap_arc_rad);
-
-		int p_cx, p_cy;
-		TRANSFORM_AND_PLOT(cx, cy, p_cx, p_cy);
+		TRANSFORM_AND_PLOT(cap_center_x + cap_radius * cosf(sweep_rad),
+						   cap_center_y + cap_radius * sinf(sweep_rad), px_cx, py_cy);
 
 		if (i > 0) {
-			FillSoftwareTriangle(buffer, p_cap_cx, p_cap_cy, last_cx, last_cy, p_cx, p_cy, atlas_w,
-								 atlas_h, palette_idx);
+			int px_c0, py_c0;
+			TRANSFORM_AND_PLOT(cap_center_x, cap_center_y, px_c0, py_c0);
+			FillSoftwareTriangle(buffer, px_c0, py_c0, last_cx, last_cy, px_cx, py_cy, sheet_w,
+								 sheet_h, palette_idx);
 		}
-		last_cx = p_cx;
-		last_cy = p_cy;
+		last_cx = px_cx;
+		last_cy = py_cy;
 	}
-
 #undef TRANSFORM_AND_PLOT
 }

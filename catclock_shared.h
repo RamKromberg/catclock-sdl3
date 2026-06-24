@@ -17,6 +17,15 @@
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
+// === CORRECTED INSERTION IN catclock_shared.h ===
+#ifndef SOKOL_GFX_INCLUDED
+#include "sokol_gfx.h"
+#endif
+
+/* Forward declare the external logging tracking function used by main() */
+void slog_func(const char* tag, uint32_t log_level, uint32_t log_item_id, const char* message,
+			   uint32_t line_nr, const char* filename, void* user_data);
+
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 
@@ -51,11 +60,27 @@
 #define HAND_TYPE_MINUTE 1
 #define HAND_TYPE_SECOND 2
 
+typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
+
 /* --- GPU-COMPATIBLE VERTEX DATA LAYOUT --- */
 typedef struct {
 	float position[2]; // x, y
 	float color[4]; // r, g, b, a
 } CatClock_GpuVertex;
+
+/* Unified 160-byte flat uniform block matching std140 layout bounds exactly */
+typedef struct {
+	float tail_uv[4]; // Offset 0:   x, y, w, h
+	float eyes_uv[4]; // Offset 16:  x, y, w, h
+	float hours_uv[4]; // Offset 32:  x, y, w, h
+	float mins_uv[4]; // Offset 48:  x, y, w, h
+	float secs_uv[4]; // Offset 64:  x, y, w, h
+	float cat_color[4]; // Offset 80:  r, g, b, a
+	float tie_color[4]; // Offset 96:  r, g, b, a
+	float pupil_color[4]; // Offset 112: r, g, b, a
+	float sclera_color[4]; // Offset 128: r, g, b, a
+	float detail_color[4]; // Offset 144: r, g, b, a
+} CatClock_ShaderUniforms;
 
 /* --- 16-BYTE ALIGNED UNIFORM STRUCT --- */
 typedef struct {
@@ -69,9 +94,6 @@ typedef struct {
 	float sclera_color[4];
 } CatClock_RenderUniforms;
 
-typedef void (*CatClock_ShaderCallback)(void* render_dest, int cell_x, int cell_y,
-										float scale_or_width, int frame_idx, void* userdata);
-
 typedef struct {
 	SDL_Texture* texture; // Immediate 32-bit hardware target layer
 	uint8_t* index_buffer; // Compressed 8-bit CPU palette memory sheet
@@ -83,24 +105,6 @@ typedef struct {
 	float last_scale; // Scale factors checkpoint monitor
 	SDL_FRect* src_rects; // Frame clip boundary tracking coordinates
 } CatClock_ComputeAtlas;
-
-typedef struct CatClock_XbmLibrary CatClock_XbmLibrary;
-
-/* --- PERFORMANCE TELEMETRY MONITORING SUBSYSTEM --- */
-#ifdef CATCLOCK_TELEMETRY
-typedef struct {
-	Uint64 start_ticks;
-	Uint64 rolling_accumulator;
-	Uint32 sample_counter;
-} CatClock_TelemetryFence;
-
-typedef struct {
-	CatClock_TelemetryFence tail_halo;
-	CatClock_TelemetryFence eyes_pupils;
-	CatClock_TelemetryFence clock_hands;
-	Uint32 logging_frequency;
-} CatClock_TelemetryContext;
-#endif
 
 // Unified App Context with Feature Restoration Flags
 typedef struct {
@@ -114,7 +118,7 @@ typedef struct {
 	SDL_Color bg_color;
 
 	// Decoupled Lifecycles for Sharp Multi-Color Blending
-	CatClock_ComputeAtlas hands_atlas; // Restored to hands_atlas
+	CatClock_ComputeAtlas hours_atlas;
 	CatClock_ComputeAtlas minutes_atlas;
 	CatClock_ComputeAtlas seconds_atlas;
 	CatClock_ComputeAtlas eyes_atlas;
@@ -159,14 +163,70 @@ typedef struct {
 #endif
 } CatClock_AppContext;
 
-struct CatClock_AppContext;
-
 typedef struct {
 	CatClock_AppContext* app_ctx;
 	float offset_x;
 	float offset_y;
 	bool force_halo_color;
 } CatClock_TailShaderArgs;
+
+typedef void (*CatClock_ShaderCallback)(void* render_dest, int cell_x, int cell_y, int sheet_w,
+										int sheet_h, int frame_idx, void* userdata);
+
+CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer);
+void CatClock_GetCatbackData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetCatwhiteData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetCattieBodyData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetCattieLineData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetHitboxData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetEyesMaskData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib);
+
+struct CatClock_AppContext;
+
+int QsortCompareFloats(const void* a, const void* b);
+void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* ctx,
+							 SDL_Renderer* renderer);
+void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
+										 float sway_deg, int hour_phase, int minute_phase,
+										 int second_phase);
+
+void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
+								 int cell_base_w, int cell_base_h, int total_frames, int cols,
+								 CatClock_ShaderCallback shader, void* userdata);
+void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
+
+/* Safe integer context shader callbacks using unified 10-column grids */
+void CatClock_ShaderHours(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						  int frame_idx, void* userdata);
+void CatClock_ShaderEyes(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						 int frame_idx, void* userdata);
+void CatClock_ShaderTail(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						 int frame_idx, void* userdata);
+
+/* Pure Hardware Sokol Presentation Management Interfaces */
+void InitSokolRenderPipeline(void);
+void AllocateStreamTextures(void);
+void PushActiveIndexBuffersToVRAM(void);
+void PushShaderUniforms(void);
+void ExecuteEventDrivenMainLoop(SDL_Window* window);
+void ReleaseSokolRenderPipeline(void);
+
+/* --- PERFORMANCE TELEMETRY MONITORING SUBSYSTEM --- */
+#ifdef CATCLOCK_TELEMETRY
+typedef struct {
+	Uint64 start_ticks;
+	Uint64 rolling_accumulator;
+	Uint32 sample_counter;
+} CatClock_TelemetryFence;
+
+typedef struct {
+	CatClock_TelemetryFence tail_halo;
+	CatClock_TelemetryFence eyes_pupils;
+	CatClock_TelemetryFence clock_hands;
+	Uint32 logging_frequency;
+} CatClock_TelemetryContext;
+#endif
 
 // ============================================================================
 // CPU SOFTWARE RASTERIZATION PRIMITIVES (STAGE 3)
@@ -248,7 +308,10 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_A
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase);
 
-CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer);
+void CatClock_GetCatbackData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetCatwhiteData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+void CatClock_GetCattieData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
+
 void CatClock_RenderXbmLayer(CatClock_XbmLibrary* lib, SDL_Renderer* renderer, const char* layer_id,
 							 SDL_Color color);
 void CatClock_RenderXbmLayerOffset(CatClock_XbmLibrary* lib, SDL_Renderer* renderer,
@@ -264,14 +327,15 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 								 CatClock_ShaderCallback shader, void* userdata);
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
 
-void CatClock_ShaderHands(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
-						  void* userdata);
-void CatClock_ShaderEyes(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
-						 void* userdata);
-void CatClock_ShaderTail(void* render_dest, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
-						 void* userdata);
-void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, float atlas_w_f,
-								 int frame_idx, void* userdata);
+/* CLEAN UPDATED INT INTERFACES: Aligned matching our strict safe bounds blitting engine */
+void CatClock_ShaderHands(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						  int frame_idx, void* userdata);
+void CatClock_ShaderEyes(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						 int frame_idx, void* userdata);
+void CatClock_ShaderTail(void* render_dest, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						 int frame_idx, void* userdata);
+void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, int sheet_w,
+								 int sheet_h, int frame_idx, void* userdata);
 
 /* Command-line subsystem processing links */
 void PrintHelpDocumentation(const char* program_name);

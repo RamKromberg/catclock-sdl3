@@ -52,15 +52,16 @@
 extern void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
 								 int width, int height, uint8_t color_idx);
 
-void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, float atlas_w_f, int frame_idx,
-						  void* userdata) {
-	/* Cast the renderer context address straight to our headless 8-bit tracking plane */
-	uint8_t* buffer = (uint8_t*) renderer;
-	int atlas_w = (int) atlas_w_f;
+void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
+						  int frame_idx, void* userdata) {
+	Uint8* buffer = (Uint8*) renderer;
+	int atlas_w = sheet_w;
+	int atlas_h = sheet_h;
+	(void) atlas_h; /* Suppress unused height warning */
 
 	/* Extract dynamic scale-aware sheet layout metrics from active runtime contexts */
-	int cell_w = ctx.hands_atlas.cell_w;
-	int cell_h = ctx.hands_atlas.cell_h;
+	int cell_w = ctx.hours_atlas.cell_w;
+	int cell_h = ctx.hours_atlas.cell_h;
 
 	int hand_type = 0;
 	if (userdata) {
@@ -153,6 +154,6 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, float atlas_w_
 	int y2 = (int) (base_r_y + (-perp_y >= 0.0f ? 0.5f : -0.5f)) + cell_y;
 
 	/* Pack the finalized pixel tokens safely into our headless 8-bit palette index buffer sheet */
-	FillSoftwareTriangle(buffer, x0, y0, x1, y1, x2, y2, atlas_w, ctx.hands_atlas.atlas_h,
+	FillSoftwareTriangle(buffer, x0, y0, x1, y1, x2, y2, atlas_w, ctx.hours_atlas.atlas_h,
 						 palette_hand_idx);
 }
