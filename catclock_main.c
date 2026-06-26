@@ -460,7 +460,6 @@ void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const uint8_t* bu
 										 int height) {
 	if (!filename || !buffer)
 		return;
-
 	FILE* pgm_file = fopen(filename, "wb");
 	if (!pgm_file) {
 		fprintf(stderr, "[ERROR] Failed to open diagnostic snapshot target path: %s\n", filename);
@@ -470,8 +469,15 @@ void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const uint8_t* bu
 	// P5 header layout: Magic ID, Dimensions, Max Channel Intensity
 	fprintf(pgm_file, "P5\n%d %d\n255\n", width, height);
 
-	// Dump the binary track matching the dimensions passed
-	fwrite(buffer, 1, (size_t) (width * height), pgm_file);
+	// Localized Fix: Amplify low contrast palette indices (0-8) to high-visibility scales (0-255)
+	for (int i = 0; i < (width * height); i++) {
+		uint8_t val = buffer[i];
+		// If it is raw uncompressed grayscale (255), leave it bright.
+		// If it is a tiny index channel value (1-8), scale it up by 30 so it pops visually
+		uint8_t enhanced_pixel = (val == 0) ? 0 : ((val == 255) ? 255 : (val * 30));
+		fputc(enhanced_pixel, pgm_file);
+	}
+
 	fclose(pgm_file);
 }
 
@@ -479,7 +485,6 @@ void PushActiveIndexBuffersToVRAM(void) {
 	if (!ctx.tail_atlas.index_buffer || ctx.tail_atlas.atlas_w <= 0)
 		return;
 
-	/* Snap the dynamic runtime scale strictly to 0.5f steps to match runtime rules */
 	float runtime_scale = ctx.current_scale;
 	if (runtime_scale <= 0.01f)
 		runtime_scale = 1.0f;
@@ -491,7 +496,7 @@ void PushActiveIndexBuffersToVRAM(void) {
 
 	int s_w = ctx.tail_atlas.atlas_w;
 	int s_h = ctx.tail_atlas.atlas_h;
-	(void) s_w; // Suppress unused compiler warnings
+	(void) s_w;
 	(void) s_h;
 
 	/* 1. COMPOSITE MAIN BACKGROUNDS ONTO HARDWARE STAGING CHANNELS */
@@ -499,17 +504,8 @@ void PushActiveIndexBuffersToVRAM(void) {
 		Uint8* bits = NULL;
 		int b_w = 0, b_h = 0;
 		int plane_bytes = 101 * 201;
+		int tie_bytes = 87 * 20; // Localized Fix: Isolate absolute byte size for the tight tie box
 
-		/* Centralized asset awareness tracking - Hitbox properties referenced safely from context
-		 */
-		int hb_w = ctx.hitbox_mask_w;
-		int hb_h = ctx.hitbox_mask_h;
-		Uint8* hitbox_bits = ctx.hitbox_bitmask;
-		(void) hb_w; // Maintained locally for tracking logic segregation
-		(void) hb_h;
-		(void) hitbox_bits;
-
-		/* Dedicated, isolated 8-bit memory sheets for each standalone texture track */
 		static Uint8* mask_staging = NULL;
 		static Uint8* body_staging = NULL;
 		static Uint8* tie_staging = NULL;
@@ -517,31 +513,35 @@ void PushActiveIndexBuffersToVRAM(void) {
 		if (!mask_staging) {
 			mask_staging = (Uint8*) SDL_calloc(1, plane_bytes);
 			body_staging = (Uint8*) SDL_calloc(1, plane_bytes);
-			tie_staging = (Uint8*) SDL_calloc(1, plane_bytes);
+			tie_staging
+				= (Uint8*) SDL_calloc(1, tie_bytes); // Allocate a clean, tight 1740-byte block
 		}
 
 		SDL_memset(mask_staging, PALETTE_TRANSPARENT, plane_bytes);
 		SDL_memset(body_staging, PALETTE_TRANSPARENT, plane_bytes);
-		SDL_memset(tie_staging, PALETTE_TRANSPARENT, plane_bytes);
+		SDL_memset(tie_staging, PALETTE_TRANSPARENT, tie_bytes);
 
-		/* A. Parse & Update Cat Body Channel (Strictly raw catback lines) */
+		/* A. Parse & Update Cat Body Channel */
 		CatClock_GetCatbackData(ctx.xbm_lib, &bits, &b_w, &b_h);
 		Rasterize1BitMaskToSheet(
 			body_staging, bits, b_w, b_h, (int) ((pad_x + visual_pad) * runtime_scale),
 			(int) ((pad_y + visual_pad) * runtime_scale), 101, 201, PALETTE_CAT_BODY);
 
-		/* B. Parse & Update Necktie Channel (Isolate lines & fills using PALETTE_TIE) */
-		CatClock_GetCattieLineData(ctx.xbm_lib, &bits, &b_w, &b_h);
-		Rasterize1BitMaskToSheet(
-			tie_staging, bits, b_w, b_h, (int) ((pad_x + visual_pad) * runtime_scale),
-			(int) ((pad_y + visual_pad) * runtime_scale), 101, 201, PALETTE_NECKTIE);
-
+		/* B. Parse & Update Necktie Channel */
 		CatClock_GetCattieBodyData(ctx.xbm_lib, &bits, &b_w, &b_h);
-		Rasterize1BitMaskToSheet(
-			tie_staging, bits, b_w, b_h, (int) ((pad_x + visual_pad) * runtime_scale),
-			(int) ((pad_y + visual_pad) * runtime_scale), 101, 201, PALETTE_NECKTIE);
+		if (bits) {
+			// Localized Fix: Map raw 255 alpha values to the true engine palette ID
+			// BEFORE the file writing process occurs.
+			for (int i = 0; i < tie_bytes; i++) {
+				if (bits[i] == 255) {
+					tie_staging[i] = PALETTE_NECKTIE; // Set cleanly to index 7
+				} else {
+					tie_staging[i] = PALETTE_TRANSPARENT; // Set cleanly to index 0
+				}
+			}
+		}
 
-		/* C. Parse & Build Silhouette Channel (Union of catback + catwhite shapes) */
+		/* C. Parse & Build Silhouette Channel */
 		CatClock_GetCatwhiteData(ctx.xbm_lib, &bits, &b_w, &b_h);
 		Rasterize1BitMaskToSheet(
 			mask_staging, bits, b_w, b_h, (int) ((pad_x + visual_pad) * runtime_scale),
@@ -564,23 +564,14 @@ void PushActiveIndexBuffersToVRAM(void) {
 		b_payload.subimage[0][0].size = plane_bytes;
 		sg_update_image(cat_body_img, &b_payload);
 
-		// =========================================================================
-		// MODIFIED PASS: DEACTIVATED RUNTIME BLITTING FOR FIXED IMMUTABLE MASK
-		// =========================================================================
-		/*
-		sg_image_data t_payload = { 0 };
-		t_payload.subimage[0][0].ptr = tie_staging;
-		t_payload.subimage[0][0].size = plane_bytes;
-		sg_update_image(necktie_img, &t_payload);
-		*/
-		// =========================================================================
+		/* NOTE: necktie_img legacy dynamic blit remains deactivated since it is a static R8 texture
+		 */
 
-		/* Expanded Tracking Suite: Output all independent layers on the first frame pass */
+		/* E. Expanded Tracking Suite: Output all independent layers on the first frame pass */
 		static bool multi_dump_committed = false;
 		if (!multi_dump_committed) {
 			printf("--- INITIATING FULL DIAGNOSTIC CPU TEXTURE SHEET MULTI-DUMP ---\n");
 
-			// Dynamic Atlases Tracking Snapshots
 			CatClock_DebugDumpSingleLayerToDisk("dump_tail.pgm", ctx.tail_atlas.index_buffer,
 												ctx.tail_atlas.atlas_w, ctx.tail_atlas.atlas_h);
 			CatClock_DebugDumpSingleLayerToDisk("dump_eyes.pgm", ctx.eyes_atlas.index_buffer,
@@ -594,13 +585,25 @@ void PushActiveIndexBuffersToVRAM(void) {
 												ctx.seconds_atlas.atlas_w,
 												ctx.seconds_atlas.atlas_h);
 
-			// Isolated Array Layers Tracking Snapshots (Independent Staging Planes)
 			CatClock_DebugDumpSingleLayerToDisk("dump_static_halo_layer0.pgm", mask_staging, 101,
 												201);
 			CatClock_DebugDumpSingleLayerToDisk("dump_static_body_layer1.pgm", body_staging, 101,
 												201);
 			CatClock_DebugDumpSingleLayerToDisk("dump_static_tie_layer2.pgm", tie_staging, 101,
 												201);
+
+			// Extract and verify our clean 87x20 production necktie mask
+			Uint8* live_tie_buffer = NULL;
+			int live_tie_w = 0, live_tie_h = 0;
+			extern void CatClock_GetCattieBodyData(CatClock_XbmLibrary * lib, Uint8 * *bits, int* w,
+												   int* h);
+			CatClock_GetCattieBodyData(ctx.xbm_lib, &live_tie_buffer, &live_tie_w, &live_tie_h);
+
+			if (live_tie_buffer && live_tie_w == 87 && live_tie_h == 20) {
+				CatClock_DebugDumpSingleLayerToDisk("dump_production_tie_mask.pgm", live_tie_buffer,
+													87, 20);
+				printf("[SUCCESS] Dumped pristine 87x20 production tie alpha mask.\n");
+			}
 
 			printf("---------------------------------------------------------------\n");
 			multi_dump_committed = true;
@@ -617,15 +620,19 @@ void PushActiveIndexBuffersToVRAM(void) {
 	sg_image_data tail_data = { 0 };
 	tail_data.subimage[0][0].ptr = ctx.tail_atlas.index_buffer;
 	tail_data.subimage[0][0].size = tail_sz;
+
 	sg_image_data eyes_data = { 0 };
 	eyes_data.subimage[0][0].ptr = ctx.eyes_atlas.index_buffer;
 	eyes_data.subimage[0][0].size = eyes_sz;
+
 	sg_image_data hours_data = { 0 };
 	hours_data.subimage[0][0].ptr = ctx.hours_atlas.index_buffer;
 	hours_data.subimage[0][0].size = hours_sz;
+
 	sg_image_data mins_data = { 0 };
 	mins_data.subimage[0][0].ptr = ctx.minutes_atlas.index_buffer;
 	mins_data.subimage[0][0].size = mins_sz;
+
 	sg_image_data secs_data = { 0 };
 	secs_data.subimage[0][0].ptr = ctx.seconds_atlas.index_buffer;
 	secs_data.subimage[0][0].size = secs_sz;

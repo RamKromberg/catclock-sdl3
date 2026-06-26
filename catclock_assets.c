@@ -73,10 +73,6 @@ uint8_t* CatClock_PreBakeTieMask(const Uint8* raw_catback, const Uint8* raw_tie)
 		}
 	}
 
-	// Call diagnostic tool using the verified signature sequence
-	CatClock_DebugDumpSingleLayerToDisk("debug_tie_mask_output.pgm", mask_buffer, CATTIE_WIDTH,
-										CATTIE_HEIGHT);
-
 	return mask_buffer;
 }
 
@@ -111,14 +107,15 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 	Uint8* raw_tie_bits = CatClock_LoadRawXbmBits("./assets/cattie.xbm", &raw_tie_w, &raw_tie_h);
 
 	if (raw_tie_bits && lib->catback_bits) {
-		// Enforce boundary confirmation logic
+		// Enforce boundary confirmation logic against 87x20 specifications
 		if (raw_tie_w == CATTIE_WIDTH && raw_tie_h == CATTIE_HEIGHT) {
-			// Re-route the processed layer directly into the engine tie buffer array
 			lib->tie_body_bits = CatClock_PreBakeTieMask(lib->catback_bits, raw_tie_bits);
-			lib->tie_body_w = CATTIE_WIDTH;
-			lib->tie_body_h = CATTIE_HEIGHT;
 
-			// Legacy fallback preservation for internal structures tracking linkage
+			// Set the dimension tracking registers inside the library context to true trimmed size
+			lib->tie_body_w = CATTIE_WIDTH; // Set cleanly to 87
+			lib->tie_body_h = CATTIE_HEIGHT; // Set cleanly to 20
+
+			// Keep the fallback line bits tracking structure fully synchronized to the new bounds
 			lib->tie_line_bits = (Uint8*) SDL_calloc(1, TIE_MASK_SIZE);
 			if (lib->tie_body_bits && lib->tie_line_bits) {
 				memcpy(lib->tie_line_bits, lib->tie_body_bits, TIE_MASK_SIZE);
@@ -126,10 +123,13 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 				lib->tie_line_h = CATTIE_HEIGHT;
 			}
 		} else {
-			fprintf(stderr, "[ERROR] Trimmed bounding dimensions mismatch on cattie.xbm\n");
+			fprintf(
+				stderr,
+				"[ERROR] Trimmed bounding dimensions mismatch on cattie.xbm. Expected 87x20.\n");
 		}
 		SDL_free(raw_tie_bits);
 	}
+
 	return lib;
 }
 
