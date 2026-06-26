@@ -30,6 +30,7 @@ pkgs.mkShell {
     bc # ./track.sh
     osslsigncode openssl # ./gen_cert.sh
     qpdf # ./pack_source.sh
+    groff groff.perl # ./cmd2pdf.sh dump.pdf 'grep -A 40 "typedef struct sg_image_desc" sokol_gfx.h' 'grep -A 25 "sg_pixel_format" sokol_gfx.h'
     # --- GPU MONITORING PACKAGES ---
     # for Intel xe graphics driver, the track.sh script does the job well enough.
     #nvtopPackages.intel
@@ -45,7 +46,7 @@ pkgs.mkShell {
 
   buildInputs = [
     windowsPkgs.stdenv.cc
-    windowsPkgs.sdl3
+    windowsPkgs.sdl3    
   ];
 
   shellHook = ''
@@ -80,9 +81,9 @@ pkgs.mkShell {
     # Export the dev prefix for compilation headers/import libs
     export WINDOWS_SDL_PREFIX="${windowsPkgs.sdl3}"
 
-    # NEW: Capture the runtime package path where the real Windows DLL lives
+    # Capture the runtime package path where the real Windows DLL lives
     export WINDOWS_SDL_BIN="${windowsPkgs.sdl3.bin or windowsPkgs.sdl3}"
-
+    
     echo "=================================================="
     echo " Kit-Cat Clock Cross-Platform Compiler Shell Active "
     echo "   -> Run 'make' to compile for native Linux"
