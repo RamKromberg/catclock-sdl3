@@ -93,6 +93,44 @@ void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* 
 		}
 		shader((void*) atlas->index_buffer, cell_x, cell_y, atlas_w, atlas_h, i, userdata);
 	}
+	// AUTOMATED UNIVERSAL VALIDATION BLUEPRINT: Dump every layer to disk for analysis
+	static bool diagnostic_atlases_dumped = false;
+	if (!diagnostic_atlases_dumped) {
+		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_PHASES) {
+			// Unpack userdata parameters inline to isolate the specific clock hand sheets
+			struct {
+				int type;
+			}* hand_ptr = userdata;
+			if (hand_ptr && hand_ptr->type == HAND_TYPE_HOUR) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_hours_atlas.pam", atlas->index_buffer,
+													atlas_w, atlas_h);
+			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_MINUTE) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_minutes_atlas.pam", atlas->index_buffer,
+													atlas_w, atlas_h);
+			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_SECOND) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
+													atlas_w, atlas_h);
+			}
+		} else if (cell_base_w == 64 && cell_base_h == 32) {
+			CatClock_DebugDumpGenericAtlasToPam("dump_eyes_atlas.pam", atlas->index_buffer, atlas_w,
+												atlas_h);
+		} else if (cell_base_w == 96 && cell_base_h == 96) {
+			struct {
+				void* app;
+				float ox;
+				float oy;
+				bool is_halo;
+			}* tail_ptr = userdata;
+			if (tail_ptr && tail_ptr->is_halo) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_tail_halo_atlas.pam", atlas->index_buffer,
+													atlas_w, atlas_h);
+			} else {
+				CatClock_DebugDumpGenericAtlasToPam("dump_tail_body_atlas.pam", atlas->index_buffer,
+													atlas_w, atlas_h);
+				diagnostic_atlases_dumped = true; // Final checkpoint complete
+			}
+		}
+	}
 }
 
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
@@ -205,4 +243,58 @@ void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr,
 
 		app_context->texture_cache_stale = false;
 	}
+}
+
+void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* raw_buffer, int w,
+										 int h) {
+	FILE* f = fopen(filepath, "wb");
+	if (!f)
+		return;
+
+	fprintf(f, "P7\n");
+	fprintf(f, "WIDTH %d\n", w);
+	fprintf(f, "HEIGHT %d\n", h);
+	fprintf(f, "DEPTH 4\n");
+	fprintf(f, "MAXVAL 255\n");
+	fprintf(f, "TUPLTYPE RGB_ALPHA\n");
+	fprintf(f, "ENDHDR\n");
+
+	for (int i = 0; i < w * h; i++) {
+		uint8_t token = raw_buffer[i];
+		uint8_t r = 0, g = 0, b = 0, a = 255;
+
+		/* Unified Token Evaluation Rules matching all composite atlas structures */
+		if (token == 0x33 || token == PALETTE_HALO) {
+			/* Solid White */
+			r = 255;
+			g = 255;
+			b = 255;
+		} else if (token == 0x66 || token == PALETTE_HAND_SECOND) {
+			/* Solid Red */
+			r = 255;
+			g = 0;
+			b = 0;
+		} else if (token == 0x99 || token == PALETTE_CAT_BODY || token == PALETTE_HAND_HOUR
+				   || token == PALETTE_HAND_MINUTE) {
+			/* Solid Black */
+			r = 0;
+			g = 0;
+			b = 0;
+		} else if (token == 0xCC) {
+			/* Soild Green  Pupil*/
+			r = 0;
+			g = 255;
+			b = 0;
+		} else {
+			/* Clear Void Alpha Spaces */
+			a = 0;
+		}
+
+		fputc(r, f);
+		fputc(g, f);
+		fputc(b, f);
+		fputc(a, f);
+	}
+
+	fclose(f);
 }

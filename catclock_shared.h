@@ -348,6 +348,8 @@ void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, int 
 
 /* Command-line subsystem processing links */
 void PrintHelpDocumentation(const char* program_name);
+void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* raw_buffer, int w,
+										 int h);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);
 void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx);
 void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer);
