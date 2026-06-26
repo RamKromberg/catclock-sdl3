@@ -76,58 +76,95 @@ uint8_t* CatClock_PreBakeTieMask(const Uint8* raw_catback, const Uint8* raw_tie)
 	return mask_buffer;
 }
 
-/**
- * Modernized XBM Initialization Library Hook.
- */
+static void SoftBlitSilhouetteBits(uint8_t* dest, int dest_w, const uint8_t* src, int src_w,
+								   int src_h, int offset_x, int offset_y) {
+	int dest_stride = (dest_w + 7) / 8;
+	int src_stride = (src_w + 7) / 8;
+
+	for (int y = 0; y < src_h; y++) {
+		int target_y = y + offset_y;
+		for (int x = 0; x < src_w; x++) {
+			int target_x = x + offset_x;
+
+			// Extract single bit data matching LSB-first XBM alignments
+			int src_byte = src[(y * src_stride) + (x / 8)];
+			int src_bit = (src_byte >> (x % 8)) & 1;
+
+			if (src_bit) {
+				int dest_byte_idx = (target_y * dest_stride) + (target_x / 8);
+				int dest_bit_pos = target_x % 8;
+
+				// Bitwise OR aggregation pass to build the master mask template
+				dest[dest_byte_idx] |= (1 << dest_bit_pos);
+			}
+		}
+	}
+}
+
 CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 	(void) renderer;
-	CatClock_XbmLibrary* lib = (CatClock_XbmLibrary*) SDL_calloc(1, sizeof(CatClock_XbmLibrary));
+	// Switch to standard calloc
+	CatClock_XbmLibrary* lib = (CatClock_XbmLibrary*) calloc(1, sizeof(CatClock_XbmLibrary));
 	if (!lib)
 		return NULL;
 
-	/* 1. Core Background Character Outlines & Fill Splines */
 	lib->catback_bits
 		= CatClock_LoadRawXbmBits("./assets/catback.xbm", &lib->catback_w, &lib->catback_h);
 	lib->catwhite_bits
 		= CatClock_LoadRawXbmBits("./assets/catwhite.xbm", &lib->catwhite_w, &lib->catwhite_h);
-
-	/* 2. Centralized Pupil Clipping Mask Configuration */
 	lib->eyes_bits = CatClock_LoadRawXbmBits("./assets/eyes.xbm", &lib->eyes_w, &lib->eyes_h);
 
-	/* 3. Centralized High-Performance Input Boundary Mask Configuration */
-	printf("[Trace] Loading hitbox...\n");
-	lib->hitbox_bits
-		= CatClock_LoadRawXbmBits("./assets/hitbox.xbm", &lib->hitbox_w, &lib->hitbox_h);
-	if (!lib->hitbox_bits) {
-		printf("[Warning] Failed to load hitbox map. Full window drag fallback enabled.\n");
+	int tie_w = 0, tie_h = 0;
+	lib->tie_body_bits = CatClock_LoadRawXbmBits("./assets/cattie.xbm", &tie_w, &tie_h);
+	lib->tie_body_w = tie_w;
+	lib->tie_body_h = tie_h;
+
+	int sil_stride = (101 + 7) / 8;
+	size_t sil_alloc_bytes = sil_stride * 201;
+	// Core master bit canvas moved to native calloc
+	ctx.master_silhouette = (uint8_t*) calloc(1, sil_alloc_bytes);
+
+	if (ctx.master_silhouette && lib->catback_bits) {
+		SoftBlitSilhouetteBits(ctx.master_silhouette, 101, lib->catback_bits, lib->catback_w,
+							   lib->catback_h, 0, 0);
+
+		if (lib->catwhite_bits) {
+			SoftBlitSilhouetteBits(ctx.master_silhouette, 101, lib->catwhite_bits, lib->catwhite_w,
+								   lib->catwhite_h, 2, 7);
+		}
+
+		if (lib->tie_body_bits && lib->tie_body_w == 87 && lib->tie_body_h == 20) {
+			SoftBlitSilhouetteBits(ctx.master_silhouette, 101, lib->tie_body_bits, lib->tie_body_w,
+								   lib->tie_body_h, 9, 75);
+		}
 	}
 
-	/* 4. Pre-process the necktie asset to execute coordinate-aligned intersections */
-	int raw_tie_w = 0, raw_tie_h = 0;
-	Uint8* raw_tie_bits = CatClock_LoadRawXbmBits("./assets/cattie.xbm", &raw_tie_w, &raw_tie_h);
+	if (lib->eyes_bits && lib->eyes_w == 54 && lib->eyes_h == 23) {
+		int eye_stride = (54 + 7) / 8;
+		size_t eye_alloc_bytes = eye_stride * 23;
+		// Clean eye mask moved to native malloc
+		ctx.clean_eye_mask = (uint8_t*) malloc(eye_alloc_bytes);
 
-	if (raw_tie_bits && lib->catback_bits) {
-		// Enforce boundary confirmation logic against 87x20 specifications
-		if (raw_tie_w == CATTIE_WIDTH && raw_tie_h == CATTIE_HEIGHT) {
-			lib->tie_body_bits = CatClock_PreBakeTieMask(lib->catback_bits, raw_tie_bits);
+		if (ctx.clean_eye_mask) {
+			// Standard string function library execution pass
+			memcpy(ctx.clean_eye_mask, lib->eyes_bits, eye_alloc_bytes);
 
-			// Set the dimension tracking registers inside the library context to true trimmed size
-			lib->tie_body_w = CATTIE_WIDTH; // Set cleanly to 87
-			lib->tie_body_h = CATTIE_HEIGHT; // Set cleanly to 20
+			int patch_rows[] = { 21, 21, 21, 22, 22, 22, 22 };
+			int patch_cols[] = { 24, 26, 28, 23, 25, 27, 29 };
+			int patch_count = 7;
 
-			// Keep the fallback line bits tracking structure fully synchronized to the new bounds
-			lib->tie_line_bits = (Uint8*) SDL_calloc(1, TIE_MASK_SIZE);
-			if (lib->tie_body_bits && lib->tie_line_bits) {
-				memcpy(lib->tie_line_bits, lib->tie_body_bits, TIE_MASK_SIZE);
-				lib->tie_line_w = CATTIE_WIDTH;
-				lib->tie_line_h = CATTIE_HEIGHT;
+			for (int i = 0; i < patch_count; i++) {
+				int r = patch_rows[i];
+				int c = patch_cols[i];
+				int target_byte = (r * eye_stride) + (c / 8);
+				int target_bit = c % 8;
+
+				ctx.clean_eye_mask[target_byte] |= (1 << target_bit);
 			}
-		} else {
-			fprintf(
-				stderr,
-				"[ERROR] Trimmed bounding dimensions mismatch on cattie.xbm. Expected 87x20.\n");
+
+			SDL_Log("[Diag] Printing Patched 1-Bit Dual-Cavity Eye Mask to Terminal:");
+			CatClock_DebugPrintXbmToTerminal("Clean Eye Mask", ctx.clean_eye_mask, 54, 23);
 		}
-		SDL_free(raw_tie_bits);
 	}
 
 	return lib;
@@ -208,15 +245,29 @@ void CatClock_GetEyesMaskData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, in
 void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 	if (!lib)
 		return;
-	SDL_free(lib->catback_bits);
-	SDL_free(lib->catwhite_bits);
+
+	// Release Stage 1 CPU buffers natively
+	if (ctx.master_silhouette) {
+		free(ctx.master_silhouette);
+		ctx.master_silhouette = NULL;
+	}
+	if (ctx.clean_eye_mask) {
+		free(ctx.clean_eye_mask);
+		ctx.clean_eye_mask = NULL;
+	}
+
+	// Release baseline assets natively
+	if (lib->catback_bits)
+		free(lib->catback_bits);
+	if (lib->catwhite_bits)
+		free(lib->catwhite_bits);
 	if (lib->tie_body_bits)
-		free(lib->tie_body_bits); // Managed through free() heap layout
-	if (lib->tie_line_bits)
-		free(lib->tie_line_bits);
-	SDL_free(lib->hitbox_bits);
-	SDL_free(lib->eyes_bits);
-	SDL_free(lib);
+		free(lib->tie_body_bits);
+	if (lib->eyes_bits)
+		free(lib->eyes_bits);
+
+	// Dismantle structural library wrapper shell context
+	free(lib);
 }
 
 Uint8* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h) {

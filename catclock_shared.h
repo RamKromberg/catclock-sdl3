@@ -153,6 +153,10 @@ typedef struct {
 	int hitbox_mask_h;
 	uint8_t* hitbox_bitmask;
 
+	// Boot-Pass 1-Bit CPU Memory Lookup Tables (Total Footprint: 2,774 Bytes)
+	uint8_t* master_silhouette; // Target Grid: 101x201 bits -> floor((101+7)/8)*201 = 2,613 Bytes
+	uint8_t* clean_eye_mask; // Target Grid: 54x23 bits  -> floor((54+7)/8)*23  = 161 Bytes
+
 	// Plain system memory array for hardware-free asset mask lookups
 	int software_mask_w;
 	int software_mask_h;
