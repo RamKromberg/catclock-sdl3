@@ -47,7 +47,8 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 			float dy = ((float) y + 0.5f - true_center_y) / pup_h;
 
 			if ((dx * dx) + (dy * dy) <= 1.0f) {
-				PlotSoftwarePixel(buffer, x, y, atlas_w, atlas_h, PALETTE_PUPIL);
+				// Assign Stateless Pupil Token ID 4 (0xCC)
+				PlotSoftwarePixel(buffer, x, y, atlas_w, atlas_h, 0xCC);
 			}
 		}
 	}
@@ -115,12 +116,10 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	}
 
 	// STEP 2: RASTERIZE SCLERAS MATCHING PRE-COMPUTED SYNCHRONIZED COMPOSITOR STRIDES
-	if (ctx.software_eyes_bitmask) {
+	if (ctx.clean_eye_mask) {
 		int mask_bytes_per_row = (unscaled_mask_w + 7) / 8;
-
-		int* x_starts = (int*) SDL_malloc(sizeof(int) * (unscaled_mask_w + 1));
-		int* y_starts = (int*) SDL_malloc(sizeof(int) * (unscaled_mask_h + 1));
-
+		int* x_starts = (int*) malloc(sizeof(int) * (unscaled_mask_w + 1));
+		int* y_starts = (int*) malloc(sizeof(int) * (unscaled_mask_h + 1));
 		int origin_px_x = (int) floorf(global_origin_x * current_scale_factor);
 		int origin_px_y = (int) floorf(global_origin_y * current_scale_factor);
 
@@ -129,7 +128,6 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 			x_starts[x]
 				= (int) floorf(absolute_head_x * current_scale_factor) - origin_px_x + cell_x;
 		}
-
 		for (int y = 0; y <= unscaled_mask_h; y++) {
 			float absolute_head_y = global_origin_y + base_pad_y + (float) y;
 			y_starts[y]
@@ -152,10 +150,11 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 				if (in_left_rect || in_right_rect) {
 					int byte_idx = (unscaled_y * mask_bytes_per_row) + (unscaled_x / 8);
 					int bit_pos = unscaled_x % 8;
-					/* Field name updated below to clean up compilation mismatch errors */
-					bool is_sclera_pixel
-						= (ctx.software_eyes_bitmask[byte_idx] & (1 << bit_pos)) != 0;
 
+					// Directive 2: Target calculations directly against pristine eye mask
+					bool is_sclera_pixel = (ctx.clean_eye_mask[byte_idx] & (1 << bit_pos)) != 0;
+
+					// XBM format maps 0 as active ink; evaluate background state cleanly
 					if (!is_sclera_pixel) {
 						int start_x = x_starts[unscaled_x];
 						int end_x = x_starts[unscaled_x + 1];
@@ -166,17 +165,16 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 							for (int out_x = start_x; out_x < end_x; out_x++) {
 								if (out_x >= atlas_w)
 									continue;
-								PlotSoftwarePixel(buffer, out_x, out_y, atlas_w, atlas_h,
-												  PALETTE_SCLERA);
+								// Assign Stateless Sclera Token ID 5 (0xFF)
+								PlotSoftwarePixel(buffer, out_x, out_y, atlas_w, atlas_h, 0xFF);
 							}
 						}
 					}
 				}
 			}
 		}
-
-		SDL_free(x_starts);
-		SDL_free(y_starts);
+		free(x_starts);
+		free(y_starts);
 	}
 
 	// STEP 3: RASTERIZE ANIMATING PUPILS OVER THE PIXELATED CONTOUR BACKDROP

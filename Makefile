@@ -162,7 +162,7 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 	@echo "========================================================================="
 
 clean:
-	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png *.pgm catclock-sdl3_resource.o
+	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png *.pgm *.pam catclock-sdl3_resource.o
 	rm -f resource.rc catclock_icon.ico
 
 clean-dist: clean

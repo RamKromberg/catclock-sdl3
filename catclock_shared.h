@@ -158,6 +158,7 @@ typedef struct {
 	uint8_t* clean_eye_mask; // Target Grid: 54x23 bits  -> floor((54+7)/8)*23  = 161 Bytes
 	float last_applied_halo_scale;
 	sg_image cat_halo_img;
+	sg_image body_composite_img;
 
 	// Plain system memory array for hardware-free asset mask lookups
 	int software_mask_w;
@@ -314,6 +315,7 @@ void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext*
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase);
+void CatClock_BakeMaterialCompositionMatrix(float current_scale);
 
 void CatClock_GetCatbackData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
 void CatClock_GetCatwhiteData(CatClock_XbmLibrary* lib, Uint8** bits, int* w, int* h);
@@ -348,6 +350,7 @@ void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, int 
 void PrintHelpDocumentation(const char* program_name);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);
 void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* ctx);
+void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer);
 
 #ifdef CATCLOCK_DIAGNOSTIC
 #define CATCLOCK_LOG_DIAG(ctx_ptr, fmt, ...)                                                       \

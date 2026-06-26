@@ -130,7 +130,7 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 
 		if (lib->catwhite_bits) {
 			SoftBlitSilhouetteBits(ctx.master_silhouette, 101, lib->catwhite_bits, lib->catwhite_w,
-								   lib->catwhite_h, 2, 7);
+								   lib->catwhite_h, 1, 6);
 		}
 
 		if (lib->tie_body_bits && lib->tie_body_w == 87 && lib->tie_body_h == 20) {
@@ -464,6 +464,148 @@ void CatClock_ExecuteScaleDependentEdgeDilation(float current_scale) {
 
 	// Cache current scale configuration checkpoint metrics
 	ctx.last_applied_halo_scale = current_scale;
+}
+
+void CatClock_BakeMaterialCompositionMatrix(float current_scale) {
+	if (!ctx.xbm_lib || !ctx.xbm_lib->catback_bits)
+		return;
+
+	int base_w = 101;
+	int base_h = 201;
+
+	// Calculate exact integer-scaled target dimensions
+	int scaled_w = (int) ((float) base_w * current_scale);
+	int scaled_h = (int) ((float) base_h * current_scale);
+	if (scaled_w <= 0 || scaled_h <= 0)
+		return;
+
+	size_t total_composite_bytes = (size_t) (scaled_w * scaled_h);
+	uint8_t* composite_buffer = (uint8_t*) malloc(total_composite_bytes);
+	if (!composite_buffer)
+		return;
+
+	// Directive 1: Initialize canvas entirely to Background (ID 0 -> 0x00)
+	memset(composite_buffer, 0x00, total_composite_bytes);
+
+	int stride_back = (ctx.xbm_lib->catback_w + 7) / 8;
+	int stride_white = (ctx.xbm_lib->catwhite_w + 7) / 8;
+	int stride_tie = (ctx.xbm_lib->tie_body_w + 7) / 8;
+
+	// Fixed absolute offset definitions configured during Stage 1 ingestion pass
+	int white_dx = 1, white_dy = 6;
+	int tie_dx = 9, tie_dy = 75;
+
+	for (int y = 0; y < scaled_h; y++) {
+		int src_y = (int) ((float) y / current_scale);
+		if (src_y >= base_h)
+			src_y = base_h - 1;
+
+		for (int x = 0; x < scaled_w; x++) {
+			int src_x = (int) ((float) x / current_scale);
+			if (src_x >= base_w)
+				src_x = base_w - 1;
+
+			uint8_t resolved_material_token = 0x00;
+
+			// Ingestion Evaluation: Extract individual layer bit states (LSB-first)
+			int back_bit
+				= (ctx.xbm_lib->catback_bits[(src_y * stride_back) + (src_x / 8)] >> (src_x % 8))
+				& 1;
+
+			int white_src_x = src_x - white_dx;
+			int white_src_y = src_y - white_dy;
+			int white_bit = 0;
+			if (white_src_x >= 0 && white_src_x < ctx.xbm_lib->catwhite_w && white_src_y >= 0
+				&& white_src_y < ctx.xbm_lib->catwhite_h) {
+				white_bit
+					= (ctx.xbm_lib->catwhite_bits[(white_src_y * stride_white) + (white_src_x / 8)]
+					   >> (white_src_x % 8))
+					& 1;
+			}
+
+			int tie_src_x = src_x - tie_dx;
+			int tie_src_y = src_y - tie_dy;
+			int tie_bit = 0;
+			if (tie_src_x >= 0 && tie_src_x < ctx.xbm_lib->tie_body_w && tie_src_y >= 0
+				&& tie_src_y < ctx.xbm_lib->tie_body_h) {
+				tie_bit = (ctx.xbm_lib->tie_body_bits[(tie_src_y * stride_tie) + (tie_src_x / 8)]
+						   >> (tie_src_x % 8))
+					& 1;
+			}
+
+			// Hierarchy Priority Mapping: Apply truth-table token composition assignments
+			if (white_bit) {
+				resolved_material_token = 0x33; // Detailing Accents / Outlines (ID 3)
+			} else if (tie_bit) {
+				resolved_material_token = 0x66; // Necktie Base Fabric layer (ID 2)
+			} else if (back_bit) {
+				resolved_material_token = 0x99; // Main Cat Body Fur region (ID 1)
+			}
+
+			composite_buffer[(y * scaled_w) + x] = resolved_material_token;
+		}
+	}
+
+	// Stream composition block out to hardware via single update payload
+	sg_image_data dynamic_payload = { 0 };
+	dynamic_payload.subimage[0][0].ptr = composite_buffer;
+	dynamic_payload.subimage[0][0].size = total_composite_bytes;
+	sg_update_image(ctx.body_composite_img, &dynamic_payload);
+
+	free(composite_buffer);
+}
+
+void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer) {
+	if (!ctx.xbm_lib || !ctx.xbm_lib->catback_bits)
+		return;
+
+	int stride_back = (ctx.xbm_lib->catback_w + 7) / 8;
+	int stride_white = (ctx.xbm_lib->catwhite_w + 7) / 8;
+	int stride_tie = (ctx.xbm_lib->tie_body_w + 7) / 8;
+
+	// Strict absolute offsets matching your initial Stage 1 ingestion specifications
+	int white_dx = 1, white_dy = 6;
+	int tie_dx = 9, tie_dy = 75;
+
+	for (int y = 0; y < 201; y++) {
+		for (int x = 0; x < 101; x++) {
+			uint8_t resolved_token = 0x00; // ID 0: Background
+
+			// Read the real bit profiles (LSB-first formatting alignment check)
+			int back_bit = (ctx.xbm_lib->catback_bits[(y * stride_back) + (x / 8)] >> (x % 8)) & 1;
+
+			int white_x = x - white_dx;
+			int white_y = y - white_dy;
+			int white_bit = 0;
+			if (white_x >= 0 && white_x < ctx.xbm_lib->catwhite_w && white_y >= 0
+				&& white_y < ctx.xbm_lib->catwhite_h) {
+				white_bit = (ctx.xbm_lib->catwhite_bits[(white_y * stride_white) + (white_x / 8)]
+							 >> (white_x % 8))
+					& 1;
+			}
+
+			int tie_x = x - tie_dx;
+			int tie_y = y - tie_dy;
+			int tie_bit = 0;
+			if (tie_x >= 0 && tie_x < ctx.xbm_lib->tie_body_w && tie_y >= 0
+				&& tie_y < ctx.xbm_lib->tie_body_h) {
+				tie_bit = (ctx.xbm_lib->tie_body_bits[(tie_y * stride_tie) + (tie_x / 8)]
+						   >> (tie_x % 8))
+					& 1;
+			}
+
+			// Hierarchy Priority Mapping: Form the accurate structural truth table layout
+			if (white_bit) {
+				resolved_token = 0x33; // ID 3: Detail Outline (██)
+			} else if (tie_bit) {
+				resolved_token = 0x66; // ID 2: Necktie Fabric (▒▒)
+			} else if (back_bit) {
+				resolved_token = 0x99; // ID 1: Main Cat Fur Body (░░)
+			}
+
+			target_buffer[(y * 101) + x] = resolved_token;
+		}
+	}
 }
 
 void CatClock_DebugPrintXbmToTerminal(const char* label, const Uint8* bits, int w, int h) {
