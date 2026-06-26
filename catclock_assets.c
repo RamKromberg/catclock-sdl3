@@ -1,7 +1,18 @@
 #include "catclock_shared.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Bounding box parameters matching specification definitions
+#define CATBACK_WIDTH 101
+#define CATBACK_HEIGHT 201
+#define CATTIE_WIDTH 87
+#define CATTIE_HEIGHT 20
+#define TIE_OFFSET_X 9
+#define TIE_OFFSET_Y 75
+#define TIE_MASK_SIZE (CATTIE_WIDTH * CATTIE_HEIGHT)
 
 struct CatClock_XbmLibrary {
 	Uint8* catback_bits;
@@ -20,6 +31,58 @@ struct CatClock_XbmLibrary {
 
 void CatClock_DebugPrintXbmToTerminal(const char* label, const Uint8* bits, int w, int h);
 
+// Global engine verification snapshot module matching the correct parameter signature
+extern void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const uint8_t* buffer,
+												int width, int height);
+extern Uint8* CatClock_LoadRawXbmBits(const char* filepath, int* out_w, int* out_h);
+
+/**
+ * CPU-side asset transformation pass utilizing dynamic heap-loaded XBM arrays.
+ */
+uint8_t* CatClock_PreBakeTieMask(const Uint8* raw_catback, const Uint8* raw_tie) {
+	uint8_t* mask_buffer = (uint8_t*) malloc(TIE_MASK_SIZE);
+	if (!mask_buffer) {
+		fprintf(stderr, "[FATAL] Out of memory allocating 1740-byte tie mask buffer.\n");
+		return NULL;
+	}
+	memset(mask_buffer, 0, TIE_MASK_SIZE);
+
+	for (int y = 0; y < CATTIE_HEIGHT; y++) {
+		for (int x = 0; x < CATTIE_WIDTH; x++) {
+			int local_idx = (y * CATTIE_WIDTH) + x;
+
+			// Step A: Extract tie bit from packed LSB-first stream
+			int tie_byte_pos = (y * ((CATTIE_WIDTH + 7) / 8)) + (x / 8);
+			int tie_bit_pos = x % 8;
+			bool is_tie_fabric = (raw_tie[tie_byte_pos] & (1 << tie_bit_pos)) != 0;
+
+			// Step B: Calculate projection site onto global catback coordinate canvas
+			int target_x = x + TIE_OFFSET_X;
+			int target_y = y + TIE_OFFSET_Y;
+
+			int back_byte_pos = (target_y * ((CATBACK_WIDTH + 7) / 8)) + (target_x / 8);
+			int back_bit_pos = target_x % 8;
+			bool is_catback_outline = (raw_catback[back_byte_pos] & (1 << back_bit_pos)) != 0;
+
+			// Step C: Polarity Trap Gate Intersection Pass
+			if (is_tie_fabric && !is_catback_outline) {
+				mask_buffer[local_idx] = 255; // Valid interior tie fabric opacity
+			} else {
+				mask_buffer[local_idx] = 0; // Transparent outline details and margin padding
+			}
+		}
+	}
+
+	// Call diagnostic tool using the verified signature sequence
+	CatClock_DebugDumpSingleLayerToDisk("debug_tie_mask_output.pgm", mask_buffer, CATTIE_WIDTH,
+										CATTIE_HEIGHT);
+
+	return mask_buffer;
+}
+
+/**
+ * Modernized XBM Initialization Library Hook.
+ */
 CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 	(void) renderer;
 	CatClock_XbmLibrary* lib = (CatClock_XbmLibrary*) SDL_calloc(1, sizeof(CatClock_XbmLibrary));
@@ -43,22 +106,27 @@ CatClock_XbmLibrary* CatClock_InitXbmLibrary(SDL_Renderer* renderer) {
 		printf("[Warning] Failed to load hitbox map. Full window drag fallback enabled.\n");
 	}
 
-	/* 4. Pre-process the necktie asset to split body fill spaces from structural lines */
+	/* 4. Pre-process the necktie asset to execute coordinate-aligned intersections */
 	int raw_tie_w = 0, raw_tie_h = 0;
 	Uint8* raw_tie_bits = CatClock_LoadRawXbmBits("./assets/cattie.xbm", &raw_tie_w, &raw_tie_h);
 
-	if (raw_tie_bits) {
-		int total_bytes = ((raw_tie_w + 7) / 8) * raw_tie_h;
-		lib->tie_body_bits = (Uint8*) SDL_calloc(1, total_bytes);
-		lib->tie_line_bits = (Uint8*) SDL_calloc(1, total_bytes);
-		lib->tie_body_w = lib->tie_line_w = raw_tie_w;
-		lib->tie_body_h = lib->tie_line_h = raw_tie_h;
+	if (raw_tie_bits && lib->catback_bits) {
+		// Enforce boundary confirmation logic
+		if (raw_tie_w == CATTIE_WIDTH && raw_tie_h == CATTIE_HEIGHT) {
+			// Re-route the processed layer directly into the engine tie buffer array
+			lib->tie_body_bits = CatClock_PreBakeTieMask(lib->catback_bits, raw_tie_bits);
+			lib->tie_body_w = CATTIE_WIDTH;
+			lib->tie_body_h = CATTIE_HEIGHT;
 
-		for (int i = 0; i < total_bytes; i++) {
-			Uint8 raw_byte = raw_tie_bits[i];
-			/* Split bits based on fill properties */
-			lib->tie_line_bits[i] = raw_byte;
-			lib->tie_body_bits[i] = ~raw_byte;
+			// Legacy fallback preservation for internal structures tracking linkage
+			lib->tie_line_bits = (Uint8*) SDL_calloc(1, TIE_MASK_SIZE);
+			if (lib->tie_body_bits && lib->tie_line_bits) {
+				memcpy(lib->tie_line_bits, lib->tie_body_bits, TIE_MASK_SIZE);
+				lib->tie_line_w = CATTIE_WIDTH;
+				lib->tie_line_h = CATTIE_HEIGHT;
+			}
+		} else {
+			fprintf(stderr, "[ERROR] Trimmed bounding dimensions mismatch on cattie.xbm\n");
 		}
 		SDL_free(raw_tie_bits);
 	}
@@ -142,8 +210,10 @@ void CatClock_DestroyXbmLibrary(CatClock_XbmLibrary* lib) {
 		return;
 	SDL_free(lib->catback_bits);
 	SDL_free(lib->catwhite_bits);
-	SDL_free(lib->tie_body_bits);
-	SDL_free(lib->tie_line_bits);
+	if (lib->tie_body_bits)
+		free(lib->tie_body_bits); // Managed through free() heap layout
+	if (lib->tie_line_bits)
+		free(lib->tie_line_bits);
 	SDL_free(lib->hitbox_bits);
 	SDL_free(lib->eyes_bits);
 	SDL_free(lib);

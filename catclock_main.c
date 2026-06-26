@@ -267,10 +267,26 @@ void AllocateStreamTextures(void) {
 													.usage = SG_USAGE_DYNAMIC,
 													.pixel_format = SG_PIXELFORMAT_R8 });
 
-	necktie_img = sg_make_image(&(sg_image_desc) { .width = 101,
-												   .height = 201,
-												   .usage = SG_USAGE_DYNAMIC,
-												   .pixel_format = SG_PIXELFORMAT_R8 });
+	Uint8* dynamic_tie_src = NULL;
+	int dynamic_tie_w = 0, dynamic_tie_h = 0;
+
+	if (ctx.xbm_lib) {
+		extern void CatClock_GetCattieBodyData(CatClock_XbmLibrary * lib, Uint8 * *bits, int* w,
+											   int* h);
+		CatClock_GetCattieBodyData(ctx.xbm_lib, &dynamic_tie_src, &dynamic_tie_w, &dynamic_tie_h);
+	}
+
+	necktie_img = sg_make_image(&(sg_image_desc) {
+		.type = SG_IMAGETYPE_2D,
+		.width = 87, // Corrected trimmed bounding box metric
+		.height = 20, // Corrected trimmed bounding box metric
+		.usage = SG_USAGE_IMMUTABLE, // High performance static VRAM footprint
+		.pixel_format = SG_PIXELFORMAT_R8, // Safe 1 byte per pixel foot map alignment
+		.label = "cattie_alpha_tint_mask",
+		.data.subimage[0][0] = { // Fully explicit Sokol layout matrix definition
+								 .ptr = dynamic_tie_src,
+								 .size = 87 * 20 } });
+	// =========================================================================
 
 	/* Force explicit dynamic streaming allocations over standard R8 targets */
 	tail_img = sg_make_image(&(sg_image_desc) { .width = ctx.tail_atlas.atlas_w,
@@ -436,48 +452,27 @@ void ReleaseSokolRenderPipeline(void) {
 	sg_destroy_image(secs_img);
 }
 
-static void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const Uint8* buffer, int w,
-												int h) {
-	if (!buffer || w <= 0 || h <= 0) {
-		printf("[Dump Warning] %s cannot be dumped: buffer is NULL or invalid size (%dx%d).\n",
-			   filename, w, h);
-		return;
-	}
-	FILE* f = fopen(filename, "wb");
-	if (!f)
+/**
+ * Writes an uncompressed P5 binary PGM grayscale map to disk.
+ * Signature order corrected to: (filename, buffer, width, height) to match legacy calls.
+ */
+void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const uint8_t* buffer, int width,
+										 int height) {
+	if (!filename || !buffer)
 		return;
 
-	// Write PGM (Portable GrayMap) binary header
-	fprintf(f, "P5\n%d %d\n255\n", w, h);
-	size_t total_elements = (size_t) w * h;
-	for (size_t i = 0; i < total_elements; i++) {
-		Uint8 val = buffer[i];
-		Uint8 grayscale = 0;
-
-		/*
-		 * Balanced Diagnostic Stretch Mapping:
-		 * 0 (Transparent) -> 0   (Pure Black Background)
-		 * 1 (Cat Body)    -> 220 (Bright Near-White for crisp line visibility)
-		 * 8 (Body Halo)   -> 255 (Absolute Pure White Silhouette)
-		 * All other values (dynamic atlases, hands, pupils) are stretched progressively
-		 * so distinct index steps remain perfectly separate and visible.
-		 */
-		if (val == 0) {
-			grayscale = 0;
-		} else if (val == 1) {
-			grayscale = 220;
-		} else if (val == 8) {
-			grayscale = 255;
-		} else {
-			// Progressive stretch for multi-indexed atlases (pupils, dials, clock hands)
-			int visual_stretch = (int) val * 40;
-			grayscale = (visual_stretch > 255) ? 255 : (Uint8) visual_stretch;
-		}
-
-		fputc(grayscale, f);
+	FILE* pgm_file = fopen(filename, "wb");
+	if (!pgm_file) {
+		fprintf(stderr, "[ERROR] Failed to open diagnostic snapshot target path: %s\n", filename);
+		return;
 	}
-	fclose(f);
-	printf("[Dump Success] Saved texture snapshot layer: %s (%dx%d)\n", filename, w, h);
+
+	// P5 header layout: Magic ID, Dimensions, Max Channel Intensity
+	fprintf(pgm_file, "P5\n%d %d\n255\n", width, height);
+
+	// Dump the binary track matching the dimensions passed
+	fwrite(buffer, 1, (size_t) (width * height), pgm_file);
+	fclose(pgm_file);
 }
 
 void PushActiveIndexBuffersToVRAM(void) {
@@ -569,10 +564,16 @@ void PushActiveIndexBuffersToVRAM(void) {
 		b_payload.subimage[0][0].size = plane_bytes;
 		sg_update_image(cat_body_img, &b_payload);
 
+		// =========================================================================
+		// MODIFIED PASS: DEACTIVATED RUNTIME BLITTING FOR FIXED IMMUTABLE MASK
+		// =========================================================================
+		/*
 		sg_image_data t_payload = { 0 };
 		t_payload.subimage[0][0].ptr = tie_staging;
 		t_payload.subimage[0][0].size = plane_bytes;
 		sg_update_image(necktie_img, &t_payload);
+		*/
+		// =========================================================================
 
 		/* Expanded Tracking Suite: Output all independent layers on the first frame pass */
 		static bool multi_dump_committed = false;
