@@ -82,40 +82,96 @@ done
     printf ".ds CH\n"
     printf ".ds RH\n"
     printf ".color 1\n" # Enables Groff native typesetting color engine
-    printf ".LD\n"     # Literal Display preserves tabs, spaces, and formatting cleanly
+    
+    printf ".nr PS 9\n"  # Document Body Text Size
+    printf ".nr VS 10\n" # Document Line Height Leading Space
+    
+    printf ".LD\n"      # Literal Display preserves tabs, spaces, and formatting cleanly
   
-    # Reconstructed Color Translation Matrix:
-    # - Translates the __BASE14__ trigger phrase directly into 76 consecutive 
-    #   solid Base-14 mathematical Em-Dash block lines (\\[em]).
-    tr -d '\r' < "$TMP_LOG" | expand -t 4 | fold -w 100 | sed -e 's/\\/\\e/g' | sed \
-        -e 's/^__BASE14_SOLID_DIVIDER_RULE__$/\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]\\[em]/' \
-        -e 's/\x1b\[01;31m/\\m[red]/g' \
-        -e 's/\x1b\[1;31m/\\m[red]/g' \
-        -e 's/\x1b\[31m/\\m[red]/g' \
-        -e 's/\x1b\[01;32m/\\m[green]/g' \
-        -e 's/\x1b\[1;32m/\\m[green]/g' \
-        -e 's/\x1b\[32m/\\m[green]/g' \
-        -e 's/\x1b\[01;33m/\\m[yellow]/g' \
-        -e 's/\x1b\[1;33m/\\m[yellow]/g' \
-        -e 's/\x1b\[33m/\\m[yellow]/g' \
-        -e 's/\x1b\[01;34m/\\m[blue]/g' \
-        -e 's/\x1b\[1;34m/\\m[blue]/g' \
-        -e 's/\x1b\[34m/\\m[blue]/g' \
-        -e 's/\x1b\[01;35m/\\m[magenta]/g' \
-        -e 's/\x1b\[1;35m/\\m[magenta]/g' \
-        -e 's/\x1b\[35m/\\m[magenta]/g' \
-        -e 's/\x1b\[01;36m/\\m[cyan]/g' \
-        -e 's/\x1b\[1;36m/\\m[cyan]/g' \
-        -e 's/\x1b\[36m/\\m[cyan]/g' \
-        -e 's/\x1b\[37m/\\m[white]/g' \
-        -e 's/\x1b\[m/\\m[black]/g' \
-        -e 's/\x1b\[0m/\\m[black]/g' \
-        -e 's/\x1b\[1m//g' \
-        -e 's/\x1b\[[0-9;]*[a-zA-Z]//g'
+    # Optimized High-Performance Stream Tokenizer via POSIX awk
+    tr -d '\r' < "$TMP_LOG" | expand -t 4 | awk '
+    BEGIN {
+        max_width = 100
+        active_color = "black"
+    }
+    {
+        if ($0 == "__BASE14_SOLID_DIVIDER_RULE__") {
+            printf ".br\n\\D'\''l \\n[.l]u 0'\''\n.br\n"
+            next
+        }
+
+        # Dynamically calculate leading indentation for wrapping alignment
+        indent_prefix = ""
+        if (match($0, /^[ ]+/)) {
+            indent_prefix = substr($0, RSTART, RLENGTH)
+        }
+        
+        if (length(indent_prefix) > 40) {
+            indent_prefix = substr(indent_prefix, 1, 40)
+        }
+
+        # Inject non-spacing escape token at start of line to stop dot-macro validation errors
+        printf "\\&"
+        col_count = 0
+        line_str = $0
+        
+        while (length(line_str) > 0) {
+            # 1. SECURITY SECURED: Translate literal backslashes to inert structural glyphs
+            if (match(line_str, /^\\/)) {
+                printf "\\[rs]"
+                col_count++
+                line_str = substr(line_str, 2)
+            }
+            # 2. Match and handle ANSI Escape Sequences
+            else if (match(line_str, /^\x1b\[[0-9;]*[a-zA-Z]/)) {
+                seq = substr(line_str, RSTART, RLENGTH)
+                line_str = substr(line_str, RSTART + RLENGTH)
+                
+                cmd_letter = substr(seq, length(seq), 1)
+                
+                if (cmd_letter == "m") {
+                    if (seq ~ /;31m/ || seq ~ /\[31m/)       { active_color = "red" }
+                    else if (seq ~ /;32m/ || seq ~ /\[32m/)  { active_color = "green" }
+                    else if (seq ~ /;33m/ || seq ~ /\[33m/)  { active_color = "yellow" }
+                    else if (seq ~ /;34m/ || seq ~ /\[34m/)  { active_color = "blue" }
+                    else if (seq ~ /;35m/ || seq ~ /\[35m/)  { active_color = "magenta" }
+                    else if (seq ~ /;36m/ || seq ~ /\[36m/)  { active_color = "cyan" }
+                    else if (seq ~ /;37m/ || seq ~ /\[37m/)  { active_color = "white" }
+                    else if (seq ~ /\[0*m/ || seq == "\x1b[m") { active_color = "black" }
+                    
+                    printf "\\m[%s]", active_color
+                }
+            }
+            # 3. Match regular printable text chunks
+            else {
+                next_esc = match(line_str, /[\x1b\\]/)
+                if (next_esc == 0) {
+                    chunk = line_str
+                    line_str = ""
+                } else {
+                    chunk = substr(line_str, 1, next_esc - 1)
+                    line_str = substr(line_str, next_esc)
+                }
+                
+                chunk_len = length(chunk)
+                for (i = 1; i <= chunk_len; i++) {
+                    printf "%s", substr(chunk, i, 1)
+                    col_count++
+                    
+                    # Smart wrapping mechanism with indentation protection
+                    if (col_count >= max_width && (i < chunk_len || length(line_str) > 0)) {
+                        printf "\n\\&%s\\m[%s]", indent_prefix, active_color
+                        col_count = length(indent_prefix)
+                    }
+                }
+            }
+        }
+        printf "\n"
+    }'
   
     printf ".DE\n"
-) | groff -Tpdf -ms \
-    -rPO=1cm -rLL=19cm -rHM=1cm -rFM=1cm \
+) | groff -Tpdf -ms -dpaper=a4 -P-pa4 \
+    -rPO=1.0cm -rLL=18.5cm -rHM=1cm -rFM=1cm \
     -f C -Ww > "$TMP_PDF"
 
 # 2. Optimize the raw PDF objects via qpdf
