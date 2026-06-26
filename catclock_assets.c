@@ -370,6 +370,102 @@ SDL_Texture* CatClock_GetXbmTextureLayer(CatClock_XbmLibrary* lib, const char* l
 	(void) layer_id;
 	return NULL;
 }
+
+void CatClock_ExecuteScaleDependentEdgeDilation(float current_scale) {
+	// Lock logic out from running on identical scale thresholds to save CPU cycles
+	if (current_scale == ctx.last_applied_halo_scale || !ctx.master_silhouette)
+		return;
+
+	int base_w = 101;
+	int base_h = 201;
+
+	// Direct Snapping Dimension Snap Rules
+	int scaled_w = (int) ((float) base_w * current_scale);
+	int scaled_h = (int) ((float) base_h * current_scale);
+	if (scaled_w <= 0 || scaled_h <= 0)
+		return;
+
+	size_t canvas_bytes = (size_t) (scaled_w * scaled_h);
+
+	// Directive 2: Sized to exact integer dimensions via native heap buffers
+	uint8_t* scaled_silhouette = (uint8_t*) calloc(1, canvas_bytes);
+	uint8_t* halo_buffer = (uint8_t*) calloc(1, canvas_bytes);
+	if (!scaled_silhouette || !halo_buffer) {
+		if (scaled_silhouette)
+			free(scaled_silhouette);
+		if (halo_buffer)
+			free(halo_buffer);
+		return;
+	}
+
+	int src_stride = (base_w + 7) / 8;
+
+	// Step A: Scaling Interpolation (Map 1-bit master onto integer scaled canvas)
+	for (int y = 0; y < scaled_h; y++) {
+		int src_y = (int) ((float) y / current_scale);
+		if (src_y >= base_h)
+			src_y = base_h - 1;
+
+		for (int x = 0; x < scaled_w; x++) {
+			int src_x = (int) ((float) x / current_scale);
+			if (src_x >= base_w)
+				src_x = base_w - 1;
+
+			int byte_idx = (src_y * src_stride) + (src_x / 8);
+			int bit_pos = src_x % 8;
+			int bit_val = (ctx.master_silhouette[byte_idx] >> bit_pos) & 1;
+
+			if (bit_val) {
+				scaled_silhouette[(y * scaled_w) + x] = 1;
+			}
+		}
+	}
+
+	// Directive 3: Execute 1-Pixel Clean Edge Dilation Pass
+	for (int y = 0; y < scaled_h; y++) {
+		for (int x = 0; x < scaled_w; x++) {
+			// Check only empty background pixels
+			if (scaled_silhouette[(y * scaled_w) + x] == 0) {
+				bool adjacent_to_foreground = false;
+
+				// 4-way orthogonal neighborhood kernel sweep
+				int dx[] = { 0, 0, -1, 1 };
+				int dy[] = { -1, 1, 0, 0 };
+
+				for (int i = 0; i < 4; i++) {
+					int nx = x + dx[i];
+					int ny = y + dy[i];
+
+					if (nx >= 0 && nx < scaled_w && ny >= 0 && ny < scaled_h) {
+						if (scaled_silhouette[(ny * scaled_w) + nx] == 1) {
+							adjacent_to_foreground = true;
+							break;
+						}
+					}
+				}
+
+				if (adjacent_to_foreground) {
+					// Turn on pixel to full R8 scale color density limit indicator
+					halo_buffer[(y * scaled_w) + x] = 255;
+				}
+			}
+		}
+	}
+
+	// Directive 4: Stream Transfer via single upload push block
+	sg_image_data stream_payload = { 0 };
+	stream_payload.subimage[0][0].ptr = halo_buffer;
+	stream_payload.subimage[0][0].size = canvas_bytes;
+	sg_update_image(ctx.cat_halo_img, &stream_payload);
+
+	// Free the temporary staging canvas immediately
+	free(scaled_silhouette);
+	free(halo_buffer);
+
+	// Cache current scale configuration checkpoint metrics
+	ctx.last_applied_halo_scale = current_scale;
+}
+
 void CatClock_DebugPrintXbmToTerminal(const char* label, const Uint8* bits, int w, int h) {
 	if (!bits || w <= 0 || h <= 0) {
 		printf("\n[XBM Debug] %s: Cannot print (Empty or NULL array)\n", label);

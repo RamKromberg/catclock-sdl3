@@ -11,6 +11,12 @@ VAL_LEFT_BRACE="{"
 KEY_RIGHT_BRACE="｝"
 VAL_RIGHT_BRACE="}"
 
+KEY_RIGHT_BRACKET="］"
+VAL_RIGHT_BRACKET="]"
+
+KEY_LEFT_BRACKET="［"
+VAL_LEFT_BRACKET="["
+
 KEY_LEFT_PAREN="（"
 VAL_LEFT_PAREN="("
 
@@ -32,6 +38,8 @@ for file in *.[ch]; do
     sed \
         -e "s/$KEY_LEFT_BRACE/$VAL_LEFT_BRACE/g" \
         -e "s/$KEY_RIGHT_BRACE/$VAL_RIGHT_BRACE/g" \
+        -e "s/$KEY_RIGHT_BRACKET/$VAL_RIGHT_BRACKET/g" \
+        -e "s/$KEY_LEFT_BRACKET/$VAL_LEFT_BRACKET/g" \
         -e "s/$KEY_LEFT_PAREN/$VAL_LEFT_PAREN/g" \
         -e "s/$KEY_RIGHT_PAREN/$VAL_RIGHT_PAREN/g" \
         -e "s/$KEY_DOUBLE_QUOTE/$VAL_DOUBLE_QUOTE/g" \

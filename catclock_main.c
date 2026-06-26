@@ -266,6 +266,11 @@ void AllocateStreamTextures(void) {
 													.height = 201,
 													.usage = SG_USAGE_DYNAMIC,
 													.pixel_format = SG_PIXELFORMAT_R8 });
+	ctx.cat_halo_img = sg_make_image(&(sg_image_desc) { .width = 101,
+														.height = 201,
+														.usage = SG_USAGE_DYNAMIC,
+														.pixel_format = SG_PIXELFORMAT_R8,
+														.label = "cat-edge-halo-texture" });
 
 	Uint8* dynamic_tie_src = NULL;
 	int dynamic_tie_w = 0, dynamic_tie_h = 0;
@@ -858,6 +863,13 @@ int main(int argc, char* argv[]) {
 				ctx.current_win_w = w;
 				ctx.current_win_h = h;
 				ctx.texture_cache_stale = true;
+
+				// Recalculate baseline multiplier and execute edge dilation instantly
+				float baseline_w = ctx.use_decorations ? 150.0f : 103.0f;
+				ctx.current_scale = (float) w / baseline_w;
+
+				CatClock_ExecuteScaleDependentEdgeDilation(ctx.current_scale);
+
 				printf("[Trace Loop] Size changed to: %dx%d\n", w, h);
 			}
 		}

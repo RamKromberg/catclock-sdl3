@@ -156,6 +156,8 @@ typedef struct {
 	// Boot-Pass 1-Bit CPU Memory Lookup Tables (Total Footprint: 2,774 Bytes)
 	uint8_t* master_silhouette; // Target Grid: 101x201 bits -> floor((101+7)/8)*201 = 2,613 Bytes
 	uint8_t* clean_eye_mask; // Target Grid: 54x23 bits  -> floor((54+7)/8)*23  = 161 Bytes
+	float last_applied_halo_scale;
+	sg_image cat_halo_img;
 
 	// Plain system memory array for hardware-free asset mask lookups
 	int software_mask_w;
@@ -191,6 +193,7 @@ struct CatClock_AppContext;
 int QsortCompareFloats(const void* a, const void* b);
 void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* ctx,
 							 SDL_Renderer* renderer);
+void CatClock_ExecuteScaleDependentEdgeDilation(float current_scale);
 void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr, CatClock_AppContext* ctx,
 										 float sway_deg, int hour_phase, int minute_phase,
 										 int second_phase);
