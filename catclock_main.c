@@ -425,6 +425,7 @@ void PushShaderUniforms(void) {
 }
 
 /* Forward declaration or direct implementation of the 1-bit static mask compiler blitter */
+/*
 static void Rasterize1BitMaskToSheet(Uint8* dest_sheet, Uint8* bits, int mask_w, int mask_h,
 									 int offset_x, int offset_y, int sheet_w, int sheet_h,
 									 Uint8 palette_idx) {
@@ -445,12 +446,13 @@ static void Rasterize1BitMaskToSheet(Uint8* dest_sheet, Uint8* bits, int mask_w,
 			int byte_idx = (y * bytes_per_row) + (x / 8);
 			int bit_pos = x % 8;
 			if ((bits[byte_idx] & (1 << bit_pos)) != 0) {
-				/* Use the real dynamic layout stride instead of hardcoded 1024 bounds */
+				// Use the real dynamic layout stride instead of hardcoded 1024 bounds
 				dest_sheet[(target_y * sheet_w) + target_x] = palette_idx;
 			}
 		}
 	}
 }
+*/
 
 void ReleaseSokolRenderPipeline(void) {
 	sg_destroy_image(cat_body_mask_img);

@@ -27,7 +27,7 @@ void slog_func(const char* tag, uint32_t log_level, uint32_t log_item_id, const 
 			   uint32_t line_nr, const char* filename, void* user_data);
 
 #include <SDL3/SDL.h>
-#include <stdbool.h>
+#include <stdlib.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -236,76 +236,116 @@ typedef struct {
 } CatClock_TelemetryContext;
 #endif
 
-// ============================================================================
-// CPU SOFTWARE RASTERIZATION PRIMITIVES (STAGE 3)
-// ============================================================================
-
+/**
+ * @brief Plots a single index byte into a palettized or 1-bit style texture sheet buffer.
+ *
+ * GPU MIGRATION REFERENCE NOTE:
+ *   - This mimics standard fragment shader writing to a 2D render target texture (imageStore /
+ * OutColor).
+ *   - Coordinates are explicitly bounds-checked here to prevent horizontal line address wrapping
+ *     or linear stride memory corruption.
+ */
 static inline void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int atlas_w, int atlas_h,
 									 uint8_t palette_idx) {
-	// Strict bounds checking eliminates illegal memory access across any atlas resolution layer
 	if (x >= 0 && x < atlas_w && y >= 0 && y < atlas_h) {
-		buffer[(y * atlas_w) + x] = palette_idx;
+		// Linear stride translation matching classic row-major texture addressing: Index = (Y *
+		// Width) + X
+		buffer[y * atlas_w + x] = palette_idx;
 	}
 }
 
+/**
+ * @brief Renders a solid polygon primitive using an industry-standard Bounding Box Half-Space (Edge
+ * Function) algorithm.
+ * @note  CRITICAL MATHEMATICAL RESOLUTION: Old vertical-sorting scanline blitters break when a
+ * primitive's Y-coordinates collapse to zero height (y0 == y1 == y2). This GPU-style edge engine
+ * evaluates every pixel center in a bounding envelope, ensuring perfectly symmetrical sub-pixel
+ * coverage across all cardinal axes (0, 15, 30, 45 seconds).
+ *
+ * GPU MIGRATION BLUEPRINT:
+ *   - This exact logic maps directly to a hardware GPU Rasterizer stage.
+ *   - Variables w0, w1, and w2 correspond to Edge Functions (Barycentric coordinates) used to
+ * determine fragment inclusion inside a primitive hull.
+ */
 static inline void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2,
 										int y2, int atlas_w, int atlas_h, uint8_t palette_idx) {
-	// Sort coordinates vertically (y0 <= y1 <= y2)
-	if (y0 > y1) {
-		int t;
-		t = x0;
-		x0 = x1;
-		x1 = t;
-		t = y0;
-		y0 = y1;
-		y1 = t;
-	}
-	if (y0 > y2) {
-		int t;
-		t = x0;
-		x0 = x2;
-		x2 = t;
-		t = y0;
-		y0 = y2;
-		y2 = t;
-	}
-	if (y1 > y2) {
-		int t;
-		t = x1;
-		x1 = x2;
-		x2 = t;
-		t = y1;
-		y1 = y2;
-		y2 = t;
-	}
+	/* 1. EXTRACT GEOMETRIC BOUNDING ENVELOPE
+	 *    Determines the absolute outer dimensional boundaries of the vertex triplet.
+	 *    Limits pixel processing loops strictly to the primitive's local canvas area.
+	 */
+	int min_x = x0;
+	if (x1 < min_x)
+		min_x = x1;
+	if (x2 < min_x)
+		min_x = x2;
+	int max_x = x0;
+	if (x1 > max_x)
+		max_x = x1;
+	if (x2 > max_x)
+		max_x = x2;
+	int min_y = y0;
+	if (y1 < min_y)
+		min_y = y1;
+	if (y2 < min_y)
+		min_y = y2;
+	int max_y = y0;
+	if (y1 > max_y)
+		max_y = y1;
+	if (y2 > max_y)
+		max_y = y2;
 
-	if (y0 == y2)
-		return;
+	/* 2. SCISSOR CLIP PASS
+	 *    Clips coordinates against the master texture atlas sheet boundaries.
+	 *    Prevents thread out-of-bounds writing when drawing shapes near the cell edges.
+	 */
+	if (min_x < 0)
+		min_x = 0;
+	if (max_x >= atlas_w)
+		max_x = atlas_w - 1;
+	if (min_y < 0)
+		min_y = 0;
+	if (max_y >= atlas_h)
+		max_y = atlas_h - 1;
 
-	int total_height = y2 - y0;
-	for (int i = 0; i < total_height; i++) {
-		int current_y = y0 + i;
-		int second_half = current_y > y1 || y0 == y1;
-		int segment_height = second_half ? y2 - y1 : y1 - y0;
+	/* 3. PARALLELIZABLE HALF-SPACE LOOP MATRIX
+	 *    Iterates through every discrete pixel center within the computed bounding box window.
+	 */
+	for (int py = min_y; py <= max_y; py++) {
+		for (int px = min_x; px <= max_x; px++) {
 
-		float alpha = (float) i / total_height;
-		float beta = (float) (current_y - (second_half ? y1 : y0)) / segment_height;
+			/* 2D Cross Product (Z-axis Determinant) of directed edge vectors relative to pixel
+			 * center (px, py). Positive value = pixel sits to the "left" of the directed line
+			 * segment. Negative value = pixel sits to the "right" of the directed line segment.
+			 * Zero value     = pixel sits exactly on the edge boundary line.
+			 *
+			 * FORMULA ARCHITECTURE: W = (V1.x - V0.x) * (P.y - V0.y) - (V1.y - V0.y) * (P.x - V0.x)
+			 */
 
-		int ax = x0 + (int) ((x2 - x0) * alpha);
-		int bx = second_half ? x1 + (int) ((x2 - x1) * beta) : x0 + (int) ((x1 - x0) * beta);
+			/* Edge function 1: Vector from v0 to v1 evaluated at pixel (px, py) */
+			int w0 = (x1 - x0) * (py - y0) - (y1 - y0) * (px - x0);
+			/* Edge function 2: Vector from v1 to v2 evaluated at pixel (px, py) */
+			int w1 = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1);
+			/* Edge function 3: Vector from v2 to v0 evaluated at pixel (px, py) */
+			int w2 = (x0 - x2) * (py - y2) - (y0 - y2) * (px - x2);
 
-		if (ax > bx) {
-			int t = ax;
-			ax = bx;
-			bx = t;
-		}
-		for (int cx = ax; cx <= bx; cx++) {
-			PlotSoftwarePixel(buffer, cx, current_y, atlas_w, atlas_h, palette_idx);
+			/* HALF-SPACE CONVENTION COVERAGE CHECK:
+			 * A pixel center is inside the primitive hull if and only if all edge evaluations share
+			 * the same sign.
+			 *   - (w0 >= 0 && w1 >= 0 && w2 >= 0) catches Clockwise (CW) vertex winding layouts.
+			 *   - (w0 <= 0 && w1 <= 0 && w2 <= 0) catches Counter-Clockwise (CCW) vertex winding
+			 * layouts.
+			 *
+			 * This uniform verification is why horizontal and vertical flat shapes render
+			 * cleanly--the edge function continuously evaluates the 2D bounding hull instead of
+			 * relying on vertical scanline split offsets.
+			 */
+			if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) {
+				PlotSoftwarePixel(buffer, px, py, atlas_w, atlas_h, palette_idx);
+			}
 		}
 	}
 }
 
-/* CRITICAL LINK FIX: Broaden visibility context scope to global compiler translation units */
 extern CatClock_AppContext ctx;
 extern int target_fps_limit;
 

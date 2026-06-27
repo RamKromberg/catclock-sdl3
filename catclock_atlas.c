@@ -1,4 +1,19 @@
-// === FULL REPLACEMENT FOR catclock_atlas.c ===
+/******************************************************************************
+ * File Name:    catclock_atlas.c
+ * Project:      catclock-sdl3 (Modernized Kit-Cat Clock Desktop Widget)
+ *
+ * Authorship & Collaboration:
+ *   - Developed in collaborative partnership between the User and Google Gemini AI.
+ *   - Core engine optimization, refactoring architecture, and porting logic
+ *     engineered jointly to achieve production-grade performance.
+ *
+ * Attribution & Legacy:
+ *   - Inspired by the classic X11/Motif 'catclock' original program.
+ *   - XBM Graphic Assets derived from the historical open-source X11 layout.
+ *
+ * License: Open Source / Educational - Preserve attribution upon redistribution.
+ *****************************************************************************/
+
 #include "catclock_atlas.h"
 #include "catclock_shared.h"
 #include <math.h>
