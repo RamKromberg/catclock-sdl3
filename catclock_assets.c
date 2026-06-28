@@ -563,15 +563,17 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer) {
 	int stride_white = (ctx.xbm_lib->catwhite_w + 7) / 8;
 	int stride_tie = (ctx.xbm_lib->tie_body_w + 7) / 8;
 
-	// Strict absolute offsets matching your initial Stage 1 ingestion specifications
+	// Calculate the row stride using the dimensions stored in the library structure
+	int stride_eyes = (ctx.xbm_lib->eyes_w + 7) / 8;
+
 	int white_dx = 1, white_dy = 6;
 	int tie_dx = 9, tie_dy = 75;
+	int eyes_dx = 25, eyes_dy = 20;
 
 	for (int y = 0; y < 201; y++) {
 		for (int x = 0; x < 101; x++) {
-			uint8_t resolved_token = 0x00; // ID 0: Background
+			uint8_t resolved_token = 0x00; // ID 0: Clear Alpha Transparent Void Space
 
-			// Read the real bit profiles (LSB-first formatting alignment check)
 			int back_bit = (ctx.xbm_lib->catback_bits[(y * stride_back) + (x / 8)] >> (x % 8)) & 1;
 
 			int white_x = x - white_dx;
@@ -594,13 +596,30 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer) {
 					& 1;
 			}
 
-			// Hierarchy Priority Mapping: Form the accurate structural truth table layout
-			if (white_bit) {
-				resolved_token = 0x33; // ID 3: Detail Outline (██)
+			int eyes_x = x - eyes_dx;
+			int eyes_y = y - eyes_dy;
+			int eyes_bit = 0;
+
+			// FIXED REDIRECTION:
+			// Read directly from ctx.clean_eye_mask to ingest the 7-pixel patch modifications
+			// safely!
+			if (ctx.clean_eye_mask && eyes_x >= 0 && eyes_x < ctx.xbm_lib->eyes_w && eyes_y >= 0
+				&& eyes_y < ctx.xbm_lib->eyes_h) {
+				eyes_bit
+					= (ctx.clean_eye_mask[(eyes_y * stride_eyes) + (eyes_x / 8)] >> (eyes_x % 8))
+					& 1;
+			}
+
+			// ELEVATED HIERARCHY WITH CAVITY INVERSION GATE:
+			if (eyes_bit == 0 && eyes_x >= 0 && eyes_x < ctx.xbm_lib->eyes_w && eyes_y >= 0
+				&& eyes_y < ctx.xbm_lib->eyes_h) {
+				resolved_token = 0x55; // Patched Eye Socket Sclera Mask Target (Yellow Validation)
+			} else if (white_bit) {
+				resolved_token = 0x33; // White Accents / Facial Line Details
 			} else if (tie_bit) {
-				resolved_token = 0x66; // ID 2: Necktie Fabric (▒▒)
+				resolved_token = 0x66; // Solid Bowtie Fabric Layer
 			} else if (back_bit) {
-				resolved_token = 0x99; // ID 1: Main Cat Fur Body (░░)
+				resolved_token = 0x99; // Black Fur Cat Silhouette Canvas
 			}
 
 			target_buffer[(y * 101) + x] = resolved_token;

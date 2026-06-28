@@ -2,7 +2,7 @@
 set -e
 
 output_pdf="catclock_repository_dump.pdf"
-file_targets="*.[ch] Makefile shell.nix gen_cert.sh sweep_phases.sh sweep_cycle.sh"
+file_targets="*.[ch] Makefile dump_seconds_atlas_validation.sh shell.nix"
 
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)

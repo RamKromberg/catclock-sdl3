@@ -518,6 +518,10 @@ static void CatClock_DebugDumpPamToDisk(const char* filepath, const uint8_t* mat
 			r = 255;
 			g = 255;
 			b = 255;
+		} else if (token == 0x55) {
+			r = 255;
+			g = 255;
+			b = 0;
 		} else if (token == 0x66) {
 			/* Red Necktie */
 			r = 255;
@@ -553,6 +557,7 @@ void PushActiveIndexBuffersToVRAM(void) {
 
 	// Extract the true multi-layered material configurations safely from your heap assets
 	CatClock_BakeUnscaledMaterialIDStaging(mask_staging);
+	// CatClock_BakeMaterialCompositionMatrix(1.0f);
 
 	// PRESERVED DIAGNOSTIC CAPABILITY: True multi-material validation is now perfectly functional
 	if (!multi_dump_committed) {
