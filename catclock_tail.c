@@ -19,8 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define RING_SEGMENTS 36
-#define CAP_SEGMENTS 17
+#define TOTAL_MESH_SEGMENTS 60
 
 void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						 int frame_idx, void* userdata) {
@@ -49,13 +48,13 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 	float cos_a = cosf(rad);
 	float sin_a = sinf(rad);
 
-	/* Read scale multipliers directly from the active atlas structure properties */
 	float internal_unit_ratio = (float) ctx.tail_atlas.cell_w / 96.0f;
 	float pivot_x
-		= (float) cell_x + ((float) ctx.tail_atlas.cell_w / 2.0f) - (1.0f * internal_unit_ratio);
+		= (float) cell_x + ((float) ctx.tail_atlas.cell_w / 2.0f) - (2.0f * internal_unit_ratio);
 	float pivot_y = (float) cell_y + (12.0f * internal_unit_ratio);
 
 	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;
+
 	float half_width = (6.5f * internal_unit_ratio) + horizontal_cushion;
 	float outer_radius = 16.5f * internal_unit_ratio;
 	float inner_radius = 3.5f * internal_unit_ratio;
@@ -72,43 +71,91 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 	float cap_center_y = loop_center_y - capsule_length_stretch + seam_pad;
 	float cap_radius = (outer_radius - inner_radius) / 2.0f;
 
-#define TRANSFORM_AND_PLOT(lx, ly, out_x, out_y)                                                   \
-	do {                                                                                           \
-		out_x = (int) (pivot_x + shift_x + ((lx) * cos_a - (ly) * sin_a));                         \
-		out_y = (int) (pivot_y + shift_y + ((lx) * sin_a + (ly) * cos_a));                         \
-	} while (0)
+	// Scale pivot and shift metrics into 8-bit Fixed-Point (Scale = 256)
+	int scale_pivot_x = (int) (pivot_x * 256.0f);
+	int scale_pivot_y = (int) (pivot_y * 256.0f);
+	int scale_shift_x = (int) (shift_x * 256.0f);
+	int scale_shift_y = (int) (shift_y * 256.0f);
+	int fx_cos = (int) (cos_a * 256.0f);
+	int fx_sin = (int) (sin_a * 256.0f);
 
-	// PART 1: STEM BODY
-	int sx0, sy0, sx1, sy1, sx2, sy2, sx3, sy3;
-	TRANSFORM_AND_PLOT(-half_width, stem_start_y, sx0, sy0);
-	TRANSFORM_AND_PLOT(half_width, stem_start_y, sx1, sy1);
-	TRANSFORM_AND_PLOT(-half_width, stem_end_y, sx2, sy2);
-	TRANSFORM_AND_PLOT(half_width, stem_end_y, sx3, sy3);
+#define FX_TRANSFORM_X(lx, ly)                                                                     \
+	(scale_pivot_x + scale_shift_x                                                                 \
+	 + ((((int) ((lx) * 256.0f) * fx_cos - (int) ((ly) * 256.0f) * fx_sin) + 128) >> 8))           \
+		>> 8
+
+#define FX_TRANSFORM_Y(lx, ly)                                                                     \
+	(scale_pivot_y + scale_shift_y                                                                 \
+	 + ((((int) ((lx) * 256.0f) * fx_sin + (int) ((ly) * 256.0f) * fx_cos) + 128) >> 8))           \
+		>> 8
+
+	// =================================================================
+	// PART 1: STEM DRAW ROUTINE
+	// =================================================================
+	int sx0 = FX_TRANSFORM_X(-half_width, stem_start_y);
+	int sy0 = FX_TRANSFORM_Y(-half_width, stem_start_y);
+	int sx1 = FX_TRANSFORM_X(half_width, stem_start_y);
+	int sy1 = FX_TRANSFORM_Y(half_width, stem_start_y);
+	int sx2 = FX_TRANSFORM_X(-half_width, stem_end_y);
+	int sy2 = FX_TRANSFORM_Y(-half_width, stem_end_y);
+	int sx3 = FX_TRANSFORM_X(half_width, stem_end_y);
+	int sy3 = FX_TRANSFORM_Y(half_width, stem_end_y);
 
 	FillSoftwareTriangle(buffer, sx0, sy0, sx1, sy1, sx2, sy2, sheet_w, sheet_h, palette_idx);
 	FillSoftwareTriangle(buffer, sx1, sy1, sx3, sy3, sx2, sy2, sheet_w, sheet_h, palette_idx);
 
-	// PART 2: CURVED RING HOOK
+	// =================================================================
+	// PART 2: THE UNIFIED MESH HOOK & HOOK CAP ASSEMBLY
+	// =================================================================
 	int last_ox = 0, last_oy = 0, last_ix = 0, last_iy = 0;
-	for (int i = 0; i < 36; i++) {
-		float t = (float) i / 35.0f;
-		float sweep_rad = (float) M_PI - (t * (float) M_PI);
-		float cos_s = cosf(sweep_rad);
-		float sin_s = sinf(sweep_rad);
 
-		float ox = loop_center_x + outer_radius * cos_s;
-		float ox_y = loop_center_y + outer_radius * sin_s;
-		float ix = loop_center_x + inner_radius * cos_s;
-		float ix_y = loop_center_y + inner_radius * sin_s;
+	for (int i = 0; i <= TOTAL_MESH_SEGMENTS; i++) {
+		float local_ox_x, local_ox_y, local_ix_x, local_ix_y;
 
-		if (i == 0 || i == 35) {
-			ox_y = stem_end_y;
-			ix_y = stem_end_y;
+		// SEGMENT DIVISION 1: The Semicircular Bottom Hook Ring (Indices 0 to 30)
+		if (i <= 30) {
+			float t = (float) i / 30.0f;
+			float sweep_rad = (float) M_PI - (t * (float) M_PI);
+
+			local_ox_x = loop_center_x + outer_radius * cosf(sweep_rad);
+			local_ox_y = loop_center_y + outer_radius * sinf(sweep_rad);
+			local_ix_x = loop_center_x + inner_radius * cosf(sweep_rad);
+			local_ix_y = loop_center_y + inner_radius * sinf(sweep_rad);
+
+			if (i == 0) {
+				local_ox_x = -half_width;
+				local_ox_y = stem_end_y;
+				local_ix_x = half_width;
+				local_ix_y = stem_end_y;
+			}
+		}
+		// SEGMENT DIVISION 2: The Vertical Straight Extension Wall (Indices 31 to 40)
+		else if (i <= 40) {
+			float t = (float) (i - 30) / 10.0f;
+			float current_y = loop_center_y - (t * (loop_center_y - cap_center_y));
+
+			local_ox_x = loop_center_x + outer_radius;
+			local_ox_y = current_y;
+			local_ix_x = loop_center_x + inner_radius;
+			local_ix_y = current_y;
+		}
+		// SEGMENT DIVISION 3: The Terminal Rounded Closure Cap (Indices 41 to 60)
+		else {
+			float t = (float) (i - 40) / 20.0f;
+			float sweep_rad = 0.0f - (t * (float) M_PI);
+
+			local_ox_x = cap_center_x + cap_radius * cosf(sweep_rad);
+			local_ox_y = cap_center_y + cap_radius * sinf(sweep_rad);
+
+			// Inner edge meets perfectly at the cap circle's spatial anchor origin
+			local_ix_x = cap_center_x;
+			local_ix_y = cap_center_y;
 		}
 
-		int px_ox, py_ox, px_ix, py_ix;
-		TRANSFORM_AND_PLOT(ox, ox_y, px_ox, py_ox);
-		TRANSFORM_AND_PLOT(ix, ix_y, px_ix, py_ix);
+		int px_ox = FX_TRANSFORM_X(local_ox_x, local_ox_y);
+		int py_ox = FX_TRANSFORM_Y(local_ox_x, local_ox_y);
+		int px_ix = FX_TRANSFORM_X(local_ix_x, local_ix_y);
+		int py_ix = FX_TRANSFORM_Y(local_ix_x, local_ix_y);
 
 		if (i > 0) {
 			FillSoftwareTriangle(buffer, last_ox, last_oy, px_ox, py_ox, last_ix, last_iy, sheet_w,
@@ -122,24 +169,6 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 		last_iy = py_ix;
 	}
 
-	// PART 3: TOP CAPSULE CLOSURE
-	int last_cx = 0, last_cy = 0;
-	for (int i = 0; i < 17; i++) {
-		float t = (float) i / 16.0f;
-		float sweep_rad = (float) M_PI + (t * (float) M_PI);
-		int px_cx, py_cy;
-
-		TRANSFORM_AND_PLOT(cap_center_x + cap_radius * cosf(sweep_rad),
-						   cap_center_y + cap_radius * sinf(sweep_rad), px_cx, py_cy);
-
-		if (i > 0) {
-			int px_c0, py_c0;
-			TRANSFORM_AND_PLOT(cap_center_x, cap_center_y, px_c0, py_c0);
-			FillSoftwareTriangle(buffer, px_c0, py_c0, last_cx, last_cy, px_cx, py_cy, sheet_w,
-								 sheet_h, palette_idx);
-		}
-		last_cx = px_cx;
-		last_cy = py_cy;
-	}
-#undef TRANSFORM_AND_PLOT
+#undef FX_TRANSFORM_X
+#undef FX_TRANSFORM_Y
 }
