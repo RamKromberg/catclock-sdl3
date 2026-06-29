@@ -15,7 +15,7 @@ LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
 
 TARGET = catclock-sdl3
 SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
-HEADERS = catclock_atlas.h catclock_shared.h catclock_xbm.h
+HEADERS = catclock_shared.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 

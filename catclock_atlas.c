@@ -14,151 +14,143 @@
  * License: Open Source / Educational - Preserve attribution upon redistribution.
  *****************************************************************************/
 
-#include "catclock_atlas.h"
 #include "catclock_shared.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* ==========================================================================
+   1. CORE PRIMITIVE VECTOR RASTERIZATION ENGINE
+   ========================================================================== */
+
+/**
+ * PlotSoftwarePixel
+ * Direct un-interpolated index writer mapping 8-bit palette tokens to the canvas.
+ * Isolated strictly to the texture atlas compilation pass.
+ */
+void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uint8_t token) {
+	if (x >= 0 && x < width && y >= 0 && y < height) {
+		buffer[(y * width) + x] = token;
+	}
+}
+
+/**
+ * FillSoftwareTriangle
+ * Standard top/bottom-split flat triangle rasterizer. Fixed to prevent
+ * sub-pixel gap bleeding across complex multi-triangle hand layouts.
+ */
+void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
+						  int width, int height, uint8_t token) {
+	/* Sort vertices vertically by Y coordinate: y0 <= y1 <= y2 */
+	if (y0 > y1) {
+		int tx = x0;
+		x0 = x1;
+		x1 = tx;
+		int ty = y0;
+		y0 = y1;
+		y1 = ty;
+	}
+	if (y0 > y2) {
+		int tx = x0;
+		x0 = x2;
+		x2 = tx;
+		int ty = y0;
+		y0 = y2;
+		y2 = ty;
+	}
+	if (y1 > y2) {
+		int tx = x1;
+		x1 = x2;
+		x2 = tx;
+		int ty = y1;
+		y1 = y2;
+		y2 = ty;
+	}
+
+	if (y0 == y2)
+		return;
+
+	int total_height = y2 - y0;
+	for (int i = 0; i < total_height; i++) {
+		int current_y = y0 + i;
+		if (current_y < 0 || current_y >= height)
+			continue;
+
+		bool second_half = i > (y1 - y0) || y1 == y0;
+		int segment_height = second_half ? (y2 - y1) : (y1 - y0);
+		if (segment_height == 0)
+			continue;
+
+		float alpha = (float) i / (float) total_height;
+		float beta = (float) (i - (second_half ? (y1 - y0) : 0)) / (float) segment_height;
+
+		int ax = x0 + (int) ((float) (x2 - x0) * alpha);
+		int bx = second_half ? (x1 + (int) ((float) (x2 - x1) * beta))
+							 : (x0 + (int) ((float) (x1 - x0) * beta));
+
+		if (ax > bx) {
+			int tx = ax;
+			ax = bx;
+			bx = tx;
+		}
+
+		/* Enforce tight bounding box clamping across the horizontal fill span */
+		int start_x = ax < 0 ? 0 : ax;
+		int end_x = bx >= width ? (width - 1) : bx;
+
+		for (int cx = start_x; cx <= end_x; cx++) {
+			buffer[(current_y * width) + cx] = token;
+		}
+	}
+}
+
+/* ==========================================================================
+   2. PIPELINE ATLAS MATRIX AND COMPILATION LIFECYCLE MANAGEMENT
+   ========================================================================== */
+
+/**
+ * CompareFloats
+ * Standard qsort comparison helper for floating-point bounds validation.
+ */
 int CompareFloats(const void* a, const void* b) {
 	float fa = *(const float*) a;
 	float fb = *(const float*) b;
 	return (fa > fb) - (fa < fb);
 }
 
-void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* ctx,
-							 SDL_Renderer* renderer) {
+/**
+ * CatClock_OnWindowResize
+ * Responds to OS-level window resize signals. Marks the GPU texture caches
+ * as stale to force a deterministic pipeline rebake on the next tick.
+ */
+void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* context,
+							 void* renderer) {
 	(void) resize_event;
 	(void) renderer;
-	if (ctx) {
-		ctx->texture_cache_stale = true;
+	if (context) {
+		context->texture_cache_stale = true;
 	}
 }
 
-void CommitBufferToSDL(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas) {
-	(void) renderer;
-	(void) atlas;
-}
-
-void CatClock_RebakeComputeAtlas(SDL_Renderer* renderer, CatClock_ComputeAtlas* atlas,
-								 int cell_base_w, int cell_base_h, int total_frames, int cols,
-								 CatClock_ShaderCallback shader, void* userdata) {
-	(void) renderer;
-	(void) cols; /* Override columns parameter to enforce universal 10-column standard */
-	if (!atlas)
-		return;
-
-	float scale = ctx.current_scale;
-	if (scale <= 0.01f)
-		scale = 1.0f;
-	scale = roundf(scale * 2.0f) / 2.0f;
-
-	/* Force universal 10-column stride across every multi-frame layer */
-	int forced_cols = 10;
-
-	if (!atlas->index_buffer || scale != atlas->last_scale || total_frames != atlas->total_frames) {
-		CatClock_DestroyComputeAtlas(atlas);
-
-		atlas->total_frames = total_frames;
-		atlas->last_scale = scale;
-
-		atlas->cell_w = (int) ceilf((float) cell_base_w * scale);
-		atlas->cell_h = (int) ceilf((float) cell_base_h * scale);
-
-		atlas->src_rects = (SDL_FRect*) SDL_malloc(sizeof(SDL_FRect) * total_frames);
-		if (!atlas->src_rects)
-			return;
-
-		int rows = (total_frames + forced_cols - 1) / forced_cols;
-		int atlas_w = forced_cols * atlas->cell_w;
-		int atlas_h = rows * atlas->cell_h;
-
-		atlas->atlas_w = atlas_w;
-		atlas->atlas_h = atlas_h;
-		atlas->texture = NULL;
-
-		atlas->index_buffer = (Uint8*) SDL_calloc(1, atlas_w * atlas_h);
-		if (!atlas->index_buffer) {
-			SDL_free(atlas->src_rects);
-			atlas->src_rects = NULL;
-			return;
-		}
-
-		for (int i = 0; i < total_frames; i++) {
-			int cell_x = (i % forced_cols) * atlas->cell_w;
-			int cell_y = (i / forced_cols) * atlas->cell_h;
-			atlas->src_rects[i] = (SDL_FRect) { (float) cell_x, (float) cell_y,
-												(float) atlas->cell_w, (float) atlas->cell_h };
-		}
-	}
-
-	int atlas_w = atlas->atlas_w;
-	int atlas_h = atlas->atlas_h;
-
-	for (int i = 0; i < total_frames; i++) {
-		int cell_x = (i % forced_cols) * atlas->cell_w;
-		int cell_y = (i / forced_cols) * atlas->cell_h;
-
-		for (int cy = 0; cy < atlas->cell_h; cy++) {
-			for (int cx = 0; cx < atlas->cell_w; cx++) {
-				int clear_idx = ((cell_y + cy) * atlas_w) + (cell_x + cx);
-				atlas->index_buffer[clear_idx] = PALETTE_TRANSPARENT;
-			}
-		}
-		shader((void*) atlas->index_buffer, cell_x, cell_y, atlas_w, atlas_h, i, userdata);
-	}
-	// AUTOMATED UNIVERSAL VALIDATION BLUEPRINT: Dump every layer to disk for analysis
-	static bool diagnostic_atlases_dumped = false;
-	if (!diagnostic_atlases_dumped) {
-		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_PHASES) {
-			// Unpack userdata parameters inline to isolate the specific clock hand sheets
-			struct {
-				int type;
-			}* hand_ptr = userdata;
-			if (hand_ptr && hand_ptr->type == HAND_TYPE_HOUR) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_hours_atlas.pam", atlas->index_buffer,
-													atlas_w, atlas_h);
-			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_MINUTE) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_minutes_atlas.pam", atlas->index_buffer,
-													atlas_w, atlas_h);
-			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_SECOND) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
-													atlas_w, atlas_h);
-			}
-		} else if (cell_base_w == 64 && cell_base_h == 32) {
-			CatClock_DebugDumpGenericAtlasToPam("dump_eyes_atlas.pam", atlas->index_buffer, atlas_w,
-												atlas_h);
-		} else if (cell_base_w == 96 && cell_base_h == 96) {
-			struct {
-				void* app;
-				float ox;
-				float oy;
-				bool is_halo;
-			}* tail_ptr = userdata;
-			if (tail_ptr && tail_ptr->is_halo) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_tail_halo_atlas.pam", atlas->index_buffer,
-													atlas_w, atlas_h);
-			} else {
-				CatClock_DebugDumpGenericAtlasToPam("dump_tail_body_atlas.pam", atlas->index_buffer,
-													atlas_w, atlas_h);
-				diagnostic_atlases_dumped = true; // Final checkpoint complete
-			}
-		}
-	}
-}
-
+/**
+ * CatClock_DestroyComputeAtlas
+ * Safely releases internal multi-frame CPU configuration layers, pre-normalized
+ * float bounding boxes, and texture sheets before reallocating.
+ */
 void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	if (!atlas)
 		return;
+
 	if (atlas->src_rects) {
-		SDL_free(atlas->src_rects);
+		free(atlas->src_rects);
 		atlas->src_rects = NULL;
 	}
 	if (atlas->index_buffer) {
-		SDL_free(atlas->index_buffer);
+		free(atlas->index_buffer);
 		atlas->index_buffer = NULL;
 	}
+
 	atlas->total_frames = 0;
 	atlas->cell_w = 0;
 	atlas->cell_h = 0;
@@ -167,149 +159,126 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->last_scale = -1.0f;
 }
 
-void CatClock_ShaderTailHaloBake(void* render_dest, int cell_x, int cell_y, int sheet_w,
-								 int sheet_h, int frame_idx, void* userdata) {
-	Uint8* buffer = (Uint8*) render_dest;
-	CatClock_TailShaderArgs* blueprint_args = (CatClock_TailShaderArgs*) userdata;
+/**
+ * CatClock_RebakeComputeAtlas
+ * Compiles mathematical layout paths onto structured VRAM-ready sheets.
+ * Executes automated blueprint file dumps to disk for structural validation.
+ */
+void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, int cell_base_w,
+								 int cell_base_h, int total_frames, int cols,
+								 CatClock_ShaderCallback shader, void* userdata) {
+	(void) renderer;
+	(void) cols;
 
-	float offsets_x[] = { -1.0f, 1.0f, 0.0f, 0.0f, -1.0f, -1.0f, 1.0f, 1.0f };
-	float offsets_y[] = { 0.0f, 0.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, 1.0f };
-
-	float real_scale = ctx.current_scale;
-
-	for (int i = 0; i < 8; i++) {
-		CatClock_TailShaderArgs pass_args;
-		pass_args.app_ctx = blueprint_args ? blueprint_args->app_ctx : NULL;
-		pass_args.offset_x = offsets_x[i] * real_scale;
-		pass_args.offset_y = offsets_y[i] * real_scale;
-		pass_args.force_halo_color = true;
-
-		/* Forward parameters down to our safe bounded compositor pass */
-		CatClock_ShaderTail(buffer, cell_x, cell_y, sheet_w, sheet_h, frame_idx, &pass_args);
+	float scale = (float) ctx.current_half_steps / 2.0f;
+	if (scale <= 0.001f) {
+		scale = 1.0f;
 	}
-}
 
-void CatClock_SynchronizePipelineAtlases(SDL_Renderer** renderer_ptr,
-										 CatClock_AppContext* app_context, float sway_deg,
-										 int hour_phase, int minute_phase, int second_phase) {
-	(void) renderer_ptr;
-	(void) sway_deg;
-	(void) hour_phase;
-	(void) minute_phase;
-	(void) second_phase;
-	if (!app_context)
-		return;
+	int forced_cols = 10;
 
-	bool actual_disable_outline = app_context->disable_outline;
+	/* Evaluate structure boundaries--reallocate sheet space if dimensions or scales shift */
+	if (!atlas->index_buffer || scale != atlas->last_scale || total_frames != atlas->total_frames) {
+		CatClock_DestroyComputeAtlas(atlas);
 
-	int win_w = app_context->current_win_w;
-	float baseline_w = app_context->use_decorations ? DECORATED_CANVAS_W : 103.0f;
-	float runtime_scale = (float) win_w / baseline_w;
-	if (runtime_scale <= 0.01f)
-		runtime_scale = 1.0f;
-	runtime_scale = roundf(runtime_scale * 2.0f) / 2.0f;
+		atlas->total_frames = total_frames;
+		atlas->last_scale = scale;
+		atlas->cell_w = (int) ceilf((float) cell_base_w * scale);
+		atlas->cell_h = (int) ceilf((float) cell_base_h * scale);
 
-	int calculated_fps_limit = target_fps_limit <= 0 ? 30 : target_fps_limit;
-	int dynamic_cycle_frames = calculated_fps_limit * 2;
+		/* Allocate explicit native coordinate data slots matching canonical definitions */
+		atlas->src_rects = malloc(sizeof(SDL_FRect) * total_frames);
+		if (!atlas->src_rects)
+			return;
 
-	static CatClock_ComputeAtlas tail_halo_blueprint = { 0 };
+		int rows = (total_frames + forced_cols - 1) / forced_cols;
+		atlas->atlas_w = forced_cols * atlas->cell_w;
+		atlas->atlas_h = rows * atlas->cell_h;
 
-	if (app_context->texture_cache_stale || !app_context->hours_atlas.index_buffer) {
-		CatClock_DestroyComputeAtlas(&app_context->hours_atlas);
-		CatClock_DestroyComputeAtlas(&app_context->minutes_atlas);
-		CatClock_DestroyComputeAtlas(&app_context->seconds_atlas);
-		CatClock_DestroyComputeAtlas(&app_context->eyes_atlas);
-		CatClock_DestroyComputeAtlas(&app_context->tail_atlas);
-		CatClock_DestroyComputeAtlas(&tail_halo_blueprint);
-
-		/* Cast configuration objects inline to avoid configuration layout mismatch errors */
-		struct {
-			int type;
-			SDL_Color color;
-		} hour_cfg = { HAND_TYPE_HOUR, app_context->hour_color };
-		struct {
-			int type;
-			SDL_Color color;
-		} minute_cfg = { HAND_TYPE_MINUTE, app_context->minute_color };
-		struct {
-			int type;
-			SDL_Color color;
-		} second_cfg = { HAND_TYPE_SECOND, app_context->second_color };
-
-		CatClock_RebakeComputeAtlas(NULL, &app_context->hours_atlas, 64, 96, TOTAL_PHASES, 6,
-									CatClock_ShaderHands, &hour_cfg);
-		CatClock_RebakeComputeAtlas(NULL, &app_context->minutes_atlas, 64, 96, TOTAL_PHASES, 6,
-									CatClock_ShaderHands, &minute_cfg);
-		CatClock_RebakeComputeAtlas(NULL, &app_context->seconds_atlas, 64, 96, TOTAL_PHASES, 6,
-									CatClock_ShaderHands, &second_cfg);
-		CatClock_RebakeComputeAtlas(NULL, &app_context->eyes_atlas, 64, 32, dynamic_cycle_frames,
-									10, CatClock_ShaderEyes, NULL);
-
-		CatClock_TailShaderArgs main_tail_args = { app_context, 0.0f, 0.0f, false };
-		main_tail_args.app_ctx->cat_color = app_context->cat_color;
-		CatClock_RebakeComputeAtlas(NULL, &app_context->tail_atlas, 96, 96, dynamic_cycle_frames, 8,
-									CatClock_ShaderTail, &main_tail_args);
-
-		if (!actual_disable_outline) {
-			CatClock_TailShaderArgs halo_bake_args = { app_context, 0.0f, 0.0f, true };
-			CatClock_RebakeComputeAtlas(NULL, &tail_halo_blueprint, 96, 96, dynamic_cycle_frames, 8,
-										CatClock_ShaderTailHaloBake, &halo_bake_args);
+		atlas->index_buffer = (uint8_t*) calloc(1, atlas->atlas_w * atlas->atlas_h);
+		if (!atlas->index_buffer) {
+			free(atlas->src_rects);
+			atlas->src_rects = NULL;
+			return;
 		}
 
-		app_context->texture_cache_stale = false;
+		/* Calculate lookups and pre-normalize them using row-subscript array indexing */
+		for (int i = 0; i < total_frames; i++) {
+			int cell_x = (i % forced_cols) * atlas->cell_w;
+			int cell_y = (i / forced_cols) * atlas->cell_h;
+			atlas->src_rects[i] = (SDL_FRect) { (float) cell_x, (float) cell_y,
+												(float) atlas->cell_w, (float) atlas->cell_h };
+		}
 	}
-}
 
-void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* raw_buffer, int w,
-										 int h) {
-	FILE* f = fopen(filepath, "wb");
-	if (!f)
-		return;
+	/* Compile individual frames using their respective procedural shader paths */
+	for (int i = 0; i < total_frames; i++) {
+		int cell_x = (i % forced_cols) * atlas->cell_w;
+		int cell_y = (i / forced_cols) * atlas->cell_h;
 
-	fprintf(f, "P7\n");
-	fprintf(f, "WIDTH %d\n", w);
-	fprintf(f, "HEIGHT %d\n", h);
-	fprintf(f, "DEPTH 4\n");
-	fprintf(f, "MAXVAL 255\n");
-	fprintf(f, "TUPLTYPE RGB_ALPHA\n");
-	fprintf(f, "ENDHDR\n");
-
-	for (int i = 0; i < w * h; i++) {
-		uint8_t token = raw_buffer[i];
-		uint8_t r = 0, g = 0, b = 0, a = 255;
-
-		/* Unified Token Evaluation Rules matching all composite atlas structures */
-		if (token == 0x33 || token == PALETTE_HALO) {
-			/* Solid White */
-			r = 255;
-			g = 255;
-			b = 255;
-		} else if (token == 0x66 || token == PALETTE_HAND_SECOND) {
-			/* Solid Red */
-			r = 255;
-			g = 0;
-			b = 0;
-		} else if (token == 0x99 || token == PALETTE_CAT_BODY || token == PALETTE_HAND_HOUR
-				   || token == PALETTE_HAND_MINUTE) {
-			/* Solid Black */
-			r = 0;
-			g = 0;
-			b = 0;
-		} else if (token == 0xCC) {
-			/* Soild Green  Pupil*/
-			r = 0;
-			g = 255;
-			b = 0;
-		} else {
-			/* Clear Void Alpha Spaces */
-			a = 0;
+		/* Erase background palette tokens within the target cell area to clean up texturing */
+		for (int cy = 0; cy < atlas->cell_h; cy++) {
+			for (int cx = 0; cx < atlas->cell_w; cx++) {
+				int clear_idx = ((cell_y + cy) * atlas->atlas_w) + (cell_x + cx);
+				atlas->index_buffer[clear_idx] = PALETTE_TRANSPARENT;
+			}
 		}
 
-		fputc(r, f);
-		fputc(g, f);
-		fputc(b, f);
-		fputc(a, f);
+		/* Invoke procedural builder to draw the layered shapes into our palette sheet */
+		shader((void*) atlas->index_buffer, cell_x, cell_y, atlas->atlas_w, atlas->atlas_h, i,
+			   userdata);
 	}
 
-	fclose(f);
+	/* ==========================================================================
+	   SYSTEM ASSET AUTOMATED BLUEPRINT DUMPS (THE TRUTH BOUNDARY)
+	   ========================================================================== */
+	static bool diagnostic_atlases_dumped = false;
+	if (!diagnostic_atlases_dumped) {
+
+		/* Detect hands by matching native tracking dimensions and frame frequencies */
+		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_HAND_PHASES) {
+			struct {
+				int type;
+				SDL_Color color;
+			}* hand_ptr = userdata;
+			if (hand_ptr && hand_ptr->type == HAND_TYPE_HOUR) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_hours_atlas.pam", atlas->index_buffer,
+													atlas->atlas_w, atlas->atlas_h);
+			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_MINUTE) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_minutes_atlas.pam", atlas->index_buffer,
+													atlas->atlas_w, atlas->atlas_h);
+			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_SECOND) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
+													atlas->atlas_w, atlas->atlas_h);
+			}
+		}
+		/* Detect moving eyes layer properties */
+		else if (cell_base_w == 64 && cell_base_h == 32) {
+			CatClock_DebugDumpGenericAtlasToPam("dump_eyes_atlas.pam", atlas->index_buffer,
+												atlas->atlas_w, atlas->atlas_h);
+		}
+		/* Detect swinging tail system configurations */
+		else if (cell_base_w == 96 && cell_base_h == 96) {
+			/* Check if this is the standard tail blueprint pass or the dilation shadow mask */
+			struct {
+				void* app;
+				float ox;
+				float oy;
+				bool is_halo;
+			}* tail_ptr = userdata;
+			if (tail_ptr && tail_ptr->is_halo) {
+				CatClock_DebugDumpGenericAtlasToPam("dump_tail_halo_atlas.pam", atlas->index_buffer,
+													atlas->atlas_w, atlas->atlas_h);
+			} else {
+				CatClock_DebugDumpGenericAtlasToPam("dump_tail_body_atlas.pam", atlas->index_buffer,
+													atlas->atlas_w, atlas->atlas_h);
+
+				/* Once the final system component completes compilation, latch our diagnostic flag
+				 */
+				diagnostic_atlases_dumped = true;
+				printf("[Verification] All component asset sheets successfully frozen to "
+					   "structural disk dumps.\n");
+			}
+		}
+	}
 }

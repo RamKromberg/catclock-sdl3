@@ -14,17 +14,27 @@
  * License: Open Source / Educational - Preserve attribution upon redistribution.
  *****************************************************************************/
 
-#include "catclock_atlas.h"
 #include "catclock_shared.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
+/* ==========================================================================
+   ANAMORPHIC DUAL-PUPIL LOOK-TRAJECTORY ENGINE
+   ========================================================================== */
+
+/**
+ * SoftwareDrawPupilOval
+ * Draws individual squeezed pupil shapes onto the sheet canvas.
+ * Preserves the original mathematical eye cavity clipping restrictions.
+ */
 static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_base_w,
 								  float r_base_h, float look_x, float max_offset_x, int atlas_w,
 								  int atlas_h, int clip_x0, int clip_y0, int clip_x1, int clip_y1) {
 	float true_center_x = cx + (look_x * max_offset_x);
 	float true_center_y = cy;
 
+	/* Original compression profiles tracking horizontal displacement look angles */
 	float compression_w = sqrtf(fmaxf(0.1f, 1.0f - (look_x * look_x * 0.45f)));
 	float compression_h = sqrtf(fmaxf(0.1f, 1.0f - (look_x * look_x * 0.225f)));
 
@@ -47,33 +57,38 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 			float dy = ((float) y + 0.5f - true_center_y) / pup_h;
 
 			if ((dx * dx) + (dy * dy) <= 1.0f) {
-				// Assign Stateless Pupil Token ID 4 (0xCC)
-				PlotSoftwarePixel(buffer, x, y, atlas_w, atlas_h, 0xCC);
+				PlotSoftwarePixel(buffer, x, y, atlas_w, atlas_h, PALETTE_PUPIL);
 			}
 		}
 	}
 }
 
+/**
+ * CatClock_ShaderEyes
+ * Procedural animator generating moving left and right eye phases.
+ * Safely scales layout dimensions based on the active state multipliers.
+ */
 void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						 int frame_idx, void* userdata) {
 	uint8_t* buffer = (uint8_t*) renderer;
 	int atlas_w = sheet_w;
 	int atlas_h = sheet_h;
-
 	(void) userdata;
 
 	int cols = 10;
-	int total_fps_frames = target_fps_limit <= 0 ? 30 : target_fps_limit;
+	int total_fps_frames = (ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps;
 	int total_frames = total_fps_frames * 2;
 
 	int cell_w = atlas_w / cols;
-	int scaled_cell_h = (int) ceilf(32.0f * ctx.current_scale) + 2;
 
-	float current_scale_factor = ctx.current_scale;
+	/* RE-ALIGNED: Derive the local float scale factor cleanly from unified half-steps tracking */
+	float scale = (float) ctx.current_half_steps / 2.0f;
+	int scaled_cell_h = (int) ceilf(32.0f * scale) + 2;
 
-	float pup_base_w = 2.5f * current_scale_factor;
-	float pup_base_h = 10.5f * current_scale_factor;
-	float max_offset_x = 5.0f * current_scale_factor;
+	/* Base proportions matching original asset canvas sizing rules */
+	float pup_base_w = 2.5f * scale;
+	float pup_base_h = 10.5f * scale;
+	float max_offset_x = 5.0f * scale;
 
 	int unscaled_mask_w = 54;
 	int unscaled_mask_h = 23;
@@ -84,28 +99,30 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	float base_gap_x = 36.0f;
 
 	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
-	float global_origin_x = (20.0f + visual_pad);
-	float global_origin_y = (16.0f + visual_pad);
 
+	/* CORRECTION: Linked to modernized canvas metrics constants inside shared header */
+	float global_origin_x = (CHOP_OFFSET_X + visual_pad);
+	float global_origin_y = (CHOP_OFFSET_Y + visual_pad);
+
+	/* Enforce rigid bounding-box clipping markers to stop color leakage between frames */
 	int clip_x0 = cell_x
-		+ ((int) floorf((global_origin_x + base_pad_x) * current_scale_factor)
-		   - (int) floorf(global_origin_x * current_scale_factor));
+		+ ((int) floorf((global_origin_x + base_pad_x) * scale)
+		   - (int) floorf(global_origin_x * scale));
 	int clip_y0 = cell_y
-		+ ((int) floorf((global_origin_y + base_pad_y) * current_scale_factor)
-		   - (int) floorf(global_origin_y * current_scale_factor));
-	int clip_x1 = clip_x0 + (int) ceilf((float) unscaled_mask_w * current_scale_factor);
-	int clip_y1 = clip_y0 + (int) ceilf((float) unscaled_mask_h * current_scale_factor);
+		+ ((int) floorf((global_origin_y + base_pad_y) * scale)
+		   - (int) floorf(global_origin_y * scale));
+	int clip_x1 = clip_x0 + (int) ceilf((float) unscaled_mask_w * scale);
+	int clip_y1 = clip_y0 + (int) ceilf((float) unscaled_mask_h * scale);
 
-	float left_eye_cx = (float) cell_x + (base_pad_x + (base_eye_w / 2.0f)) * current_scale_factor;
-	float right_eye_cx = (float) cell_x + (base_gap_x + (base_eye_w / 2.0f)) * current_scale_factor;
-	float true_center_y
-		= (float) cell_y + (base_pad_y + (base_eye_w / 2.0f)) * current_scale_factor;
+	float left_eye_cx = (float) cell_x + (base_pad_x + (base_eye_w / 2.0f)) * scale;
+	float right_eye_cx = (float) cell_x + (base_gap_x + (base_eye_w / 2.0f)) * scale;
+	float true_center_y = (float) cell_y + (base_pad_y + (base_eye_w / 2.0f)) * scale;
 
 	float phase_ratio = ((float) frame_idx + 0.5f) / (float) total_frames;
 	float swing_angle = phase_ratio * 2.0f * (float) M_PI;
 	float horizontal_look = sinf(swing_angle);
 
-	// STEP 1: CLEAR TARGET ATLAS CELL CANVAS (TRANSPARENT BOUNDS INDEX)
+	/* Clean cell footprint boundary */
 	for (int y = cell_y; y < cell_y + scaled_cell_h; y++) {
 		if (y >= atlas_h)
 			continue;
@@ -116,7 +133,7 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 		}
 	}
 
-	// STEP 2: RASTERIZE ANIMATING PUPILS OVER THE PIXELATED CONTOUR BACKDROP
+	/* Draw left and right moving pupils safely clipped inside their respective sockets */
 	SoftwareDrawPupilOval(buffer, left_eye_cx, true_center_y, pup_base_w, pup_base_h,
 						  horizontal_look, max_offset_x, atlas_w, atlas_h, clip_x0, clip_y0,
 						  clip_x1, clip_y1);

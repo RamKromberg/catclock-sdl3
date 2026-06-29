@@ -68,22 +68,6 @@ __attribute__((unused)) static void DrawDebugReferenceLine(Uint8* buffer, int at
 }
 
 /**
- * @brief Legacy clock hand geometry shader pipeline pass.
- * @note Maintained internally for comparative legacy reference testing loops.
- */
-void CatClock_ShaderHandsOld(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
-							 int frame_idx, void* userdata) {
-	/* Legacy pointer pencil-taper implementation code preserved internally */
-	(void) renderer;
-	(void) cell_x;
-	(void) cell_y;
-	(void) sheet_w;
-	(void) sheet_h;
-	(void) frame_idx;
-	(void) userdata;
-}
-
-/**
  * @brief Authoritative Master Software Raster Pass for Clock Hand Geometry.
  *
  * MATHEMATICAL METHODOLOGY SUMMARY:
@@ -109,12 +93,16 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, i
 	/* State variable blocks explicitly grouped at the top of the function module */
 	Uint8* buffer = (Uint8*) renderer;
 	int atlas_w = sheet_w;
-	int phase = frame_idx % TOTAL_PHASES;
+	int phase = frame_idx % TOTAL_HAND_PHASES;
 	int cell_w = ctx.hours_atlas.cell_w;
 	int cell_h = ctx.hours_atlas.cell_h;
 
-	/* Active hand category context extraction token */
-	int hand_type = userdata ? *(int*) userdata : 0;
+	/* Decode active configuration tracking container safely off incoming stack frames */
+	struct {
+		int type;
+		SDL_Color color;
+	}* hand_cfg = (typeof(hand_cfg)) userdata;
+	int hand_type = hand_cfg ? hand_cfg->type : 0;
 
 	/* Core structural layout parameter placeholders */
 	float back_pivot_length = 7.0f;
@@ -136,7 +124,7 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, i
 	float local_pivot_y = 45.0f;
 	float aspect_x = 0.711f;
 	float aspect_y = 0.97f;
-	float scale = ctx.current_scale;
+	float scale = (float) ctx.current_half_steps / 2.0f;
 
 	/* Dynamic timeline calculation tracking variables */
 	float vertical_factor = 0.0f;
@@ -184,7 +172,7 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, i
 	 * seamlessly between 39px (North) and 43px (South) throughout the cycle.
 	 * The output serves as the master length reference for the active frame pass.
 	 */
-	vertical_factor = -cosf(((float) phase / (float) TOTAL_PHASES) * 2.0f * (float) M_PI);
+	vertical_factor = -cosf(((float) phase / (float) TOTAL_HAND_PHASES) * 2.0f * (float) M_PI);
 	dynamic_seconds_base = 41.0f + (vertical_factor * 2.0f);
 
 	/* =========================================================================
@@ -230,7 +218,7 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, i
 	 * This isolates our trigonometry from horizontal compression distorting our normals.
 	 */
 	angle_rad
-		= ((float) phase / (float) TOTAL_PHASES) * 2.0f * (float) M_PI - ((float) M_PI / 2.0f);
+		= ((float) phase / (float) TOTAL_HAND_PHASES) * 2.0f * (float) M_PI - ((float) M_PI / 2.0f);
 	cos_a = cosf(angle_rad);
 	sin_a = sinf(angle_rad);
 

@@ -59,7 +59,7 @@ done
 magick dump_tail_body_atlas.png "$TMP_DIR/color_anchor.png" +append \
   \( -size 96x96 xc:none +antialias \
      -stroke blue -strokewidth 1 -fill none -draw "rectangle 0,0 95,95" \
-     -stroke green -strokewidth 1 -draw "line 47,0 47,95" -draw "line 0,12 95,12" \
+     -stroke green -strokewidth 1 -draw "line 39,0 39,95" -draw "line 52,0 52,95" \
      -write mpr:tailgrid +delete \) \
   \( +clone -tile mpr:tailgrid -draw "color 0,0 reset" \) \
   -compose Dst_Over -composite \
