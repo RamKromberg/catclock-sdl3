@@ -3,19 +3,35 @@
 let
   windowsPkgs = pkgs.pkgsCross.mingwW64;
 
-  # last stable version before 2024-01-29 and 2024-01-30 when 363d53e through 06913be introduced the massive Spring Cleaning Overhaul that renamed sg_pass to attachments, deleted context pooling, removed sg_begin_default_pass, and flattened stage array names.
-  srcSokol = pkgs.fetchFromGitHub {
+  # The June 22, 2026 Runtime Engine Source Tree
+  sokolSrc = pkgs.fetchFromGitHub {
     owner = "floooh";
     repo = "sokol";
-    rev = "f58a78539e6a972700579ee72cb3f2d66f07088f";
-    sha256 = "sha256-QGg1XXFFMjVo4gNn00CHouowywZQQko9tYnBFYAedJA=";
+    rev = "28f9d8d44d92dab8536791a9f7d13d7e911a2b39";
+    sha256 = "sha256-2KdUPf0ceUeh8Fd+VDoOdJKmE6ZjjZnW8S5apDxniDk=";
   };
-  #$ git log -1 f58a78539e6a972700579ee72cb3f2d66f07088f
-  #commit f58a78539e6a972700579ee72cb3f2d66f07088f
-  #Author: Andre Weissflog <floooh@gmail.com>
-  #Date:   Wed Jan 24 19:13:52 2024 +0100
-  #
-  #    remove dead link from readme
+
+  # The June 13, 2026 Static Compiler Tool Binary Extraction Derivation
+  sokolCompiler = pkgs.stdenv.mkDerivation {
+    pname = "sokol-shdc";
+    version = "2026-06-13";
+
+    src = pkgs.fetchFromGitHub {
+      owner = "floooh";
+      repo = "sokol-tools-bin";
+      rev = "b1cdec93b99496f41f3862d1d84f8fe2f96f2fb3";
+      sha256 = "sha256-QOi09ZjxfzF1aokfFsIWY56aKCSMkwXuGZ/F6mWZ/8A=";
+    };
+
+    dontBuild = true;
+    dontConfigure = true;
+
+    installPhase = ''
+      mkdir -p $out/bin
+      cp bin/linux/sokol-shdc $out/bin/sokol-shdc
+      chmod +x $out/bin/sokol-shdc
+    '';
+  };
 in
 
 pkgs.mkShell {
@@ -23,14 +39,13 @@ pkgs.mkShell {
     pkg-config
     gcc
     gnumake
-    sdl3
     libfaketime
     imagemagick
     clang-tools # $ make format
     bc # ./track.sh
     osslsigncode openssl # ./gen_cert.sh
     qpdf # ./pack_source.sh
-    groff groff.perl # ./cmd2pdf.sh dump.pdf 'grep -A 40 "typedef struct sg_image_desc" sokol_gfx.h' 'grep -A 25 "sg_pixel_format" sokol_gfx.h'
+    groff groff.perl # ./cmd2pdf.sh dump.pdf 'grep -A 40 "typedef struct sg_image_desc" sokol/sokol_gfx.h' 'grep -A 25 "sg_pixel_format" sokol/sokol_gfx.h'
     # --- GPU MONITORING PACKAGES ---
     # for Intel xe graphics driver, the track.sh script does the job well enough.
     #nvtopPackages.intel
@@ -38,7 +53,8 @@ pkgs.mkShell {
     #nvtopPackages.full
     #intel-gpu-tools
     #amdgpu_top
-    #sokol needs:
+    sdl3
+    sokolCompiler
     libGL.dev
     libx11.dev
     wayland.dev
@@ -60,15 +76,8 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
     
-    # Create atomic soft symbolic targets for compiler search routes
     if [ ! -d "./sokol" ]; then
-      ln -sfn "${srcSokol}" ./sokol
-    fi
-    if [ ! -f "sokol_gfx.h" ]; then
-      ln -sfn ./sokol/sokol_gfx.h ./sokol_gfx.h
-    fi
-    if [ ! -f "sokol_log.h" ]; then
-      ln -sfn ./sokol/sokol_log.h ./sokol_log.h
+      ln -sfn "${sokolSrc}" ./sokol
     fi
 
     if [ -d .git ]; then

@@ -20,15 +20,20 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef SOKOL_IMPL
 #define SOKOL_IMPL
-#include "sokol_gfx.h"
-#include "sokol_log.h"
+#endif
+#ifndef SOKOL_GLCORE
+#define SOKOL_GLCORE
+#endif
+
+#include "sokol/sokol_gfx.h"
+#include "sokol/sokol_log.h"
+#include "catclock_shaders.h"
 
 /* Global tracking state instance matching our shared interface declaration */
 CatClock_AppContext ctx = { 0 };
 
-const char* kmtcat_fs_src = "";
-const char* kmtcat_vs_src = "";
 int target_fps_limit = DEFAULT_FPS;
 
 /* ==========================================================================
@@ -146,7 +151,9 @@ int main(int argc, char* argv[]) {
 	SDL_GL_MakeCurrent(ctx.window, gl_context);
 
 	/* Setup Sokol Framework Context Backend */
-	sg_desc sokol_description = { .logger.func = slog_func };
+	sg_desc sokol_description
+		= { .logger.func = slog_func,
+			.environment = { .defaults = { .color_format = SG_PIXELFORMAT_RGBA8 } } };
 	sg_setup(&sokol_description);
 
 	if (!sg_isvalid()) {

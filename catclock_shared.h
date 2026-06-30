@@ -17,7 +17,7 @@
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
-#include "sokol_gfx.h"
+#include "sokol/sokol_gfx.h"
 #include <SDL3/SDL.h>
 #include <stdbool.h>
 #include <stdint.h>

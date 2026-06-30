@@ -97,8 +97,10 @@ FF_RANGE='[（）｛｝［］＂＇｀；＊，．：！？＋－／＼＝＜＞
 # Dynamically generate an unprintable ASCII SOH (0x01 / Ctrl-A) byte to use as a delimiter
 DELIM=$(printf '\001')
 
+file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl"
 # Loop over local source files
-for file in *.[ch]; do
+for pattern in $file_targets; do
+  for file in $pattern; do
     # 1. Basic existence check
     [ -f "$file" ] || continue
 
@@ -186,4 +188,6 @@ for file in *.[ch]; do
         echo "$file after:"
         echo "$results_after"
     fi
+  done
 done
+

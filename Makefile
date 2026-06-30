@@ -3,10 +3,10 @@ CC = gcc
 # Minimal Stage 4 Sokol Platform Detection Hooks
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    SOKOL_FLAGS = -DSOKOL_GLCORE33
+    SOKOL_FLAGS = -DSOKOL_GLCORE
     SYS_LIBS = -ldl
 else
-    SOKOL_FLAGS = -DSOKOL_GLCORE33
+    SOKOL_FLAGS = -DSOKOL_GLCORE
     SYS_LIBS = -ldl
 endif
 
@@ -15,7 +15,7 @@ LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
 
 TARGET = catclock-sdl3
 SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
-HEADERS = catclock_shared.h
+HEADERS = catclock_shared.h catclock_shaders.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 
@@ -50,10 +50,13 @@ $(TARGET): $(OBJS)
 %.win.o: %.c $(HEADERS)
 	$(WIN_CC) $(WIN_CFLAGS) -c $< -o $@
 
+catclock_shaders.h: ./shaders/catclock.glsl
+	sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders.h --slang glsl430
+
 # Deterministic source formatting utility target
 format:
 	#clang-format -i $(SRCS) $(HEADERS)
-	clang-format -i catclock_*.c catclock_*.h
+	clang-format -i catclock_*.c catclock_*.h ./shaders/*.glsl
 
 # AUTOMATED ASSET BAKE OPTION FOR ROADMAP REPRODUCIBILITY
 # === FILE: Makefile === Update the asset target block cleanly
@@ -162,8 +165,10 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 	@echo "========================================================================="
 
 clean:
-	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) *.png *.pgm *.pam catclock-sdl3_resource.o
+	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) catclock-sdl3_resource.o 
+	rm -f *.png *.pgm *.pam
 	rm -f resource.rc catclock_icon.ico
+	rm -f catclock_shaders.h
 
 clean-dist: clean
 	rm -f $(SDL_DLL) $(SDL_ZIP)

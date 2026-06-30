@@ -2,7 +2,7 @@
 set -e
 
 output_pdf="catclock_repository_dump.pdf"
-file_targets="*.[ch] Makefile dump_validation.sh shell.nix"
+file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl Makefile dump_validation.sh shell.nix"
 
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)

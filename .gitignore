@@ -2,5 +2,3 @@ cert.key
 cert.crt
 cert.pfx
 sokol
-sokol_gfx.h
-sokol_log.h
