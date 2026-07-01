@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <math.h>
 
 #ifndef SOKOL_IMPL
 #define SOKOL_IMPL
@@ -78,25 +79,59 @@ static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window* win, const SDL_
 /* ==========================================================================
    APPLICATION ENTRY RUNTIME LAYER
    ========================================================================== */
-
-void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* lib) {
-	static uint8_t* mask_staging = NULL;
-	static bool multi_dump_committed = false;
-	int plane_bytes = ASSET_BODY_W * ASSET_BODY_H;
-
-	if (!mask_staging)
-		mask_staging = (uint8_t*) malloc(plane_bytes);
-	if (!mask_staging)
+void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* library) {
+	if (!library)
 		return;
 
-	/* RE-ALIGNED: Pass the handle token straight to target block loops */
-	CatClock_BakeUnscaledMaterialIDStaging(mask_staging, lib);
+	/* Calculate the active scale factor derived from the Stage 2 integer tracker */
+	float active_scale = (float) ctx.current_half_steps / 2.0f;
 
-	if (!multi_dump_committed) {
-		CatClock_DebugDumpPamToDisk("dump_material_composition.pam", mask_staging, ASSET_BODY_W,
-									ASSET_BODY_H);
-		multi_dump_committed = true;
+	/* Fetch pristine unscaled original workspace sizing metrics from your assets metadata */
+	int base_w = ASSET_BODY_W;
+	int base_h = ASSET_BODY_H;
+
+	/* Scale final destination sheet composition canvas boundaries */
+	int comp_w = (int) ceilf((float) base_w * active_scale);
+	int comp_h = (int) ceilf((float) base_h * active_scale);
+
+	/* 1. Allocate a temporary buffer to capture the unscaled 1x pre-aligned layout mask */
+	uint8_t* unscaled_staging = (uint8_t*) malloc(base_w * base_h);
+	if (!unscaled_staging)
+		return;
+
+	/* Invoke the core engine routine to bake and resolve layered 1x token fields perfectly */
+	CatClock_BakeUnscaledMaterialIDStaging(unscaled_staging, library);
+
+	/* 2. Allocate the scaled composition target canvas buffer */
+	uint8_t* composition_buffer = (uint8_t*) calloc(1, comp_w * comp_h);
+	if (!composition_buffer) {
+		free(unscaled_staging);
+		return;
 	}
+
+	/* 3. Upsample the pre-aligned combined material index array to match integer steps */
+	for (int y = 0; y < comp_h; y++) {
+		int src_y = (int) ((float) y / active_scale);
+		if (src_y >= base_h)
+			continue;
+
+		for (int x = 0; x < comp_w; x++) {
+			int src_x = (int) ((float) x / active_scale);
+			if (src_x >= base_w)
+				continue;
+
+			/* Direct index sampling from the pre-resolved unscaled mesh layout array */
+			composition_buffer[(y * comp_w) + x] = unscaled_staging[(src_y * base_w) + src_x];
+		}
+	}
+
+	/* Free the unscaled placeholder buffer since processing is complete */
+	free(unscaled_staging);
+
+	/* Write out the cleanly scaled PAM matrix directly using your canonical disk dump sink */
+	CatClock_DebugDumpPamToDisk("dump_material_composition.pam", composition_buffer, comp_w,
+								comp_h);
+	free(composition_buffer);
 }
 
 int main(int argc, char* argv[]) {
@@ -155,7 +190,6 @@ int main(int argc, char* argv[]) {
 		= { .logger.func = slog_func,
 			.environment = { .defaults = { .color_format = SG_PIXELFORMAT_RGBA8 } } };
 	sg_setup(&sokol_description);
-
 	if (!sg_isvalid()) {
 		fprintf(stderr, "[Fatal Error] Sokol GFX framework context layer validation failure.\n");
 		SDL_GL_MakeCurrent(ctx.window, NULL);
@@ -165,6 +199,10 @@ int main(int argc, char* argv[]) {
 		return 1;
 	}
 	printf("[Trace] Sokol Core GFX successfully attached to standard rendering pipeline.\n");
+
+	// === FILE: catclock_main.c ===
+	// Adjunct lines: Replace the block starting right after sg_setup(&sokol_description); down to
+	// the cleanup phase before return 0;
 
 	struct CatClock_XbmLibrary* runtime_xbm_handle = CatClock_InitXbmLibrary(NULL);
 	if (!runtime_xbm_handle) {
@@ -180,9 +218,9 @@ int main(int argc, char* argv[]) {
 	}
 
 	/* ==========================================================================
-	   AUTOMATED SYSTEM BLUEPRINT ATLAS COMPILATION TRIGGERS
-	   ========================================================================== */
-	printf("[Verification] Triggering automated offline compilation validation maps...\n");
+	STAGE 2: DETERMINISTIC INTERACTIVE STEP VALIDATION LOOP
+	========================================================================== */
+	printf("[Verification] Entering interactive runtime event processing layout loop...\n");
 
 	struct {
 		int type;
@@ -196,36 +234,115 @@ int main(int argc, char* argv[]) {
 		int type;
 		SDL_Color color;
 	} sec_cfg = { HAND_TYPE_SECOND, ctx.second_color };
-
-	/* Execute the discrete sheet builds, writing binary maps to disk */
-	CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 6,
-								CatClock_ShaderHands, &hour_cfg);
-	CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 6,
-								CatClock_ShaderHands, &min_cfg);
-	CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 6,
-								CatClock_ShaderHands, &sec_cfg);
-	CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, (ctx.target_fps * 2), 10,
-								CatClock_ShaderEyes, NULL);
-
-	printf("[Trace] Compiling swinging tail system blueprints...\n");
-
 	CatClock_TailShaderArgs tail_data = { 0.0f, 0.0f, false };
-	CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 8,
-								CatClock_ShaderTail, &tail_data);
 
-	/* Instrumentation entries tracking execution shuffler indices */
-	time_t raw_now = time(NULL);
-	struct tm* t_struct = localtime(&raw_now);
-	Diagnostics_LogShufflerIndex("Needle_Hour", (t_struct->tm_hour % 12), TOTAL_HAND_PHASES);
-	Diagnostics_LogShufflerIndex("Needle_Minute", t_struct->tm_min, TOTAL_HAND_PHASES);
-	Diagnostics_LogShufflerIndex("Needle_Second", t_struct->tm_sec, TOTAL_HAND_PHASES);
-	Diagnostics_LogShufflerIndex("Appendage_Tail",
-								 (int) (ctx.current_frame_step % (ctx.target_fps * 2)),
-								 (ctx.target_fps * 2));
-	printf("[Trace] Atlases processed. Committing material grid dumps...\n");
-	Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+	/* Force baseline allocation synchronization trace on initialization */
+	ctx.texture_cache_stale = true;
+
+	bool running = true;
+	SDL_Event event;
+
+	while (running) {
+		while (SDL_PollEvent(&event)) {
+			if (event.type == SDL_EVENT_QUIT) {
+				running = false;
+			}
+			/* Capture keyboard step tracking scale transformations */
+			else if (event.type == SDL_EVENT_KEY_DOWN) {
+				/* Immediate termination check via Escape shortcut key pattern */
+				if (event.key.key == SDLK_ESCAPE) {
+					running = false;
+					break;
+				}
+
+				uint32_t old_steps = ctx.current_half_steps;
+				if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+					if (ctx.current_half_steps < 20)
+						ctx.current_half_steps++;
+				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+					if (ctx.current_half_steps > 1)
+						ctx.current_half_steps--;
+				}
+
+				if (ctx.current_half_steps != old_steps) {
+					ctx.texture_cache_stale = true;
+					Diagnostics_LogScaleBoundaryChange(ctx.current_half_steps,
+													   ((float) ctx.current_half_steps / 2.0f));
+
+					/* Explicitly resize the desktop window framework to match integer scale factors
+					 */
+					float updated_scale = (float) ctx.current_half_steps / 2.0f;
+					int next_w = (int) (baseline_w * updated_scale);
+					int next_h = (int) (baseline_h * updated_scale);
+					SDL_SetWindowSize(ctx.window, next_w, next_h);
+				}
+			}
+			/* Capture continuous mouse wheel scale modifications */
+			else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+				uint32_t old_steps = ctx.current_half_steps;
+				if (event.wheel.y > 0.0f) {
+					if (ctx.current_half_steps < 20)
+						ctx.current_half_steps++;
+				} else if (event.wheel.y < 0.0f) {
+					if (ctx.current_half_steps > 1)
+						ctx.current_half_steps--;
+				}
+
+				if (ctx.current_half_steps != old_steps) {
+					ctx.texture_cache_stale = true;
+					Diagnostics_LogScaleBoundaryChange(ctx.current_half_steps,
+													   ((float) ctx.current_half_steps / 2.0f));
+
+					float updated_scale = (float) ctx.current_half_steps / 2.0f;
+					int next_w = (int) (baseline_w * updated_scale);
+					int next_h = (int) (baseline_h * updated_scale);
+					SDL_SetWindowSize(ctx.window, next_w, next_h);
+				}
+			}
+		}
+
+		/* Regenerate asset textures on the CPU only when cache check state flags shift */
+		if (ctx.texture_cache_stale) {
+			CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+										CatClock_ShaderHands, &hour_cfg);
+			CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+										CatClock_ShaderHands, &min_cfg);
+			CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+										CatClock_ShaderHands, &sec_cfg);
+			CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
+										CatClock_ShaderEyes, NULL); // Fixed to ctx.target_fps
+			CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
+										CatClock_ShaderTail, &tail_data);
+
+			Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+			ctx.texture_cache_stale = false;
+			printf("[Trace] Dynamic textures cached and committed to disk files at half-step: %u\n",
+				   ctx.current_half_steps);
+		}
+
+		/* Placeholder Graphics Render Pass: Clear the window using the context background token */
+		glClearColor((float) ctx.window_bg_color.r / 255.0f, (float) ctx.window_bg_color.g / 255.0f,
+					 (float) ctx.window_bg_color.b / 255.0f,
+					 (float) ctx.window_bg_color.a / 255.0f);
+		glClear(GL_COLOR_BUFFER_BIT);
+		SDL_GL_SwapWindow(ctx.window);
+
+		/* Standard execution logging step tracking loop metrics */
+		time_t raw_now = time(NULL);
+		struct tm* t_struct = localtime(&raw_now);
+		Diagnostics_LogShufflerIndex("Needle_Hour", (t_struct->tm_hour % 12), TOTAL_HAND_PHASES);
+		Diagnostics_LogShufflerIndex("Needle_Minute", t_struct->tm_min, TOTAL_HAND_PHASES);
+		Diagnostics_LogShufflerIndex("Needle_Second", t_struct->tm_sec, TOTAL_HAND_PHASES);
+		Diagnostics_LogShufflerIndex("Appendage_Tail",
+									 (int) (ctx.current_frame_step % (ctx.target_fps * 2)),
+									 (ctx.target_fps * 2));
+
+		SDL_Delay(1000 / ctx.target_fps);
+		ctx.current_frame_step++;
+	}
 
 	printf("[Trace] Validation pass finished. Component layout extraction complete.\n");
+	/* Release computing resources clean before teardown exit */
 
 	/* Release computing resources clean before teardown exit */
 	CatClock_DestroyComputeAtlas(&ctx.hours_atlas);

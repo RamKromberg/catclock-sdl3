@@ -99,9 +99,7 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	context->detail_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->sclera_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
-
-	/* Enforce baseline mapping properties */
-	context->current_half_steps = 2; /* 2 half-steps = 1.0x uniform scale base */
+	context->current_half_steps = 2;
 	context->hide_seconds = false;
 	context->target_fps = DEFAULT_FPS;
 	context->use_decorations = false;
@@ -117,18 +115,12 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 		} else if (strcmp(argv[i], "--scale") == 0) {
 			if ((i + 1) < argc) {
 				float sc = (float) atof(argv[++i]);
-				/* Apply original reference constraint boundaries */
-				if (sc < 0.5f)
-					sc = 0.5f;
-				if (sc > 10.0f)
-					sc = 10.0f;
-
-				/* Translate incoming float multiplier safely into integer half-steps */
-				context->current_half_steps = (uint32_t) (sc * 2.0f);
-				if (context->current_half_steps < 1) {
-					context->current_half_steps = 1;
-				}
-				/* Telemetry log trigger embedded without altering storage transitions */
+				int calculated_steps = (int) (sc * 2.0f + 0.5f);
+				if (calculated_steps < 1)
+					calculated_steps = 1;
+				if (calculated_steps > 20)
+					calculated_steps = 20;
+				context->current_half_steps = (uint32_t) calculated_steps;
 				Diagnostics_LogScaleBoundaryChange(context->current_half_steps,
 												   ((float) context->current_half_steps / 2.0f));
 			}

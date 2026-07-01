@@ -10,5 +10,9 @@ SpaceAfterCStyleCast: true
 AlignAfterOpenBracket: Align
 
 ---
-# 2. Sub-Language Target Rule (Forces .glsl files to parse using the C++ parser)
+# 2. Sub-Language Target Rule (Overrides configuration ONLY for GLSL/Cpp files)
 Language: Cpp
+# FIX 1: Stop reflowing and splitting Sokol @vs, @fs, and @program comment tags
+ReflowComments: false
+# FIX 2: Prevent aggressive line wrapping on dense shader vector calculations
+ColumnLimit: 0

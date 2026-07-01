@@ -156,7 +156,7 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->cell_h = 0;
 	atlas->atlas_w = 0;
 	atlas->atlas_h = 0;
-	atlas->last_scale = -1.0f;
+	atlas->scale_half_steps = 0;
 }
 
 /**
@@ -171,18 +171,15 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 	(void) cols;
 
 	float scale = (float) ctx.current_half_steps / 2.0f;
-	if (scale <= 0.001f) {
-		scale = 1.0f;
-	}
-
 	int forced_cols = 10;
 
-	/* Evaluate structure boundaries--reallocate sheet space if dimensions or scales shift */
-	if (!atlas->index_buffer || scale != atlas->last_scale || total_frames != atlas->total_frames) {
+	/* Restrict dynamic regeneration to run only when state updates or frame limits shift */
+	if (!atlas->index_buffer || ctx.current_half_steps != atlas->scale_half_steps
+		|| total_frames != atlas->total_frames) {
 		CatClock_DestroyComputeAtlas(atlas);
 
 		atlas->total_frames = total_frames;
-		atlas->last_scale = scale;
+		atlas->scale_half_steps = ctx.current_half_steps;
 		atlas->cell_w = (int) ceilf((float) cell_base_w * scale);
 		atlas->cell_h = (int) ceilf((float) cell_base_h * scale);
 
@@ -229,13 +226,9 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 			   userdata);
 	}
 
-	/* ==========================================================================
-	   SYSTEM ASSET AUTOMATED BLUEPRINT DUMPS (THE TRUTH BOUNDARY)
-	   ========================================================================== */
-	static bool diagnostic_atlases_dumped = false;
-	if (!diagnostic_atlases_dumped) {
-
-		/* Detect hands by matching native tracking dimensions and frame frequencies */
+	/* System Asset Automated Blueprint Dumps System */
+	/* STAGE 2: Force disk dumps to overwrite whenever texture cache state transitions */
+	if (ctx.texture_cache_stale) {
 		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_HAND_PHASES) {
 			struct {
 				int type;
@@ -251,15 +244,10 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
 													atlas->atlas_w, atlas->atlas_h);
 			}
-		}
-		/* Detect moving eyes layer properties */
-		else if (cell_base_w == 64 && cell_base_h == 32) {
+		} else if (cell_base_w == 64 && cell_base_h == 32) {
 			CatClock_DebugDumpGenericAtlasToPam("dump_eyes_atlas.pam", atlas->index_buffer,
 												atlas->atlas_w, atlas->atlas_h);
-		}
-		/* Detect swinging tail system configurations */
-		else if (cell_base_w == 96 && cell_base_h == 96) {
-			/* Check if this is the standard tail blueprint pass or the dilation shadow mask */
+		} else if (cell_base_w == 96 && cell_base_h == 96) {
 			struct {
 				void* app;
 				float ox;
@@ -272,12 +260,8 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 			} else {
 				CatClock_DebugDumpGenericAtlasToPam("dump_tail_body_atlas.pam", atlas->index_buffer,
 													atlas->atlas_w, atlas->atlas_h);
-
-				/* Once the final system component completes compilation, latch our diagnostic flag
-				 */
-				diagnostic_atlases_dumped = true;
-				printf("[Verification] All component asset sheets successfully frozen to "
-					   "structural disk dumps.\n");
+				printf("[Verification] Dynamic component asset sheets successfully updated on "
+					   "disk.\n");
 			}
 		}
 	}

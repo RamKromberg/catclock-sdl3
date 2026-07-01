@@ -56,7 +56,7 @@ catclock_shaders.h: ./shaders/catclock.glsl
 # Deterministic source formatting utility target
 format:
 	#clang-format -i $(SRCS) $(HEADERS)
-	clang-format -i catclock_*.c catclock_*.h ./shaders/*.glsl
+	clang-format -i catclock_*.c catclock_*.h
 
 # AUTOMATED ASSET BAKE OPTION FOR ROADMAP REPRODUCIBILITY
 # === FILE: Makefile === Update the asset target block cleanly

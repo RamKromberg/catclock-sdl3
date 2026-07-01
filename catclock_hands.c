@@ -120,11 +120,11 @@ void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, i
 	int final_offset_y = row_idx * cell_h;
 
 	/* Legacy face template configuration baselines */
-	float local_pivot_x = 31.0f;
-	float local_pivot_y = 45.0f;
 	float aspect_x = 0.711f;
 	float aspect_y = 0.97f;
 	float scale = (float) ctx.current_half_steps / 2.0f;
+	float local_pivot_x = 31.0f * scale;
+	float local_pivot_y = 45.0f * scale;
 
 	/* Dynamic timeline calculation tracking variables */
 	float vertical_factor = 0.0f;
