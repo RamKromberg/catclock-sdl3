@@ -3,6 +3,7 @@ set -e
 
 output_pdf="catclock_repository_dump.pdf"
 file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl Makefile dump_validation.sh shell.nix"
+file_nontargets="catclock_shaders.h"
 
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)
@@ -17,6 +18,20 @@ for file in $file_targets; do
     if [[ "$file" == *"sokol"* ]]; then
         continue
     fi
+    skip_file=0
+    for nontarget in $file_nontargets; do
+        case "$file" in
+            $nontarget | */$nontarget)
+                skip_file=1
+                break
+                ;;
+        esac
+    done
+
+    if [ "$skip_file" -eq 1 ]; then
+        continue
+    fi
+
     if [ -f "$file" ]; then
         printf "===FILE:%s===\n" "$file" >> "$tmp_payload"
         cat "$file" >> "$tmp_payload"

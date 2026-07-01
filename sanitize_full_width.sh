@@ -98,6 +98,7 @@ FF_RANGE='[（）｛｝［］＂＇｀；＊，．：！？＋－／＼＝＜＞
 DELIM=$(printf '\001')
 
 file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl"
+file_nontargets="catclock_shaders.h"
 # Loop over local source files
 for pattern in $file_targets; do
   for file in $pattern; do
@@ -107,6 +108,21 @@ for pattern in $file_targets; do
     # 2. Reject symbolic links
     if [ -L "$file" ]; then
         echo "Skipping symbolic link: $file"
+        continue
+    fi
+
+    skip_file=0
+    for nontarget in $file_nontargets; do
+      case "$file" in
+        $nontarget | */$nontarget)
+          skip_file=1
+          break
+          ;;
+      esac
+    done
+
+    if [ "$skip_file" -eq 1 ]; then
+        echo "Skipping non-target file: $file"
         continue
     fi
 
@@ -122,12 +138,12 @@ for pattern in $file_targets; do
         continue
     fi
 
-    # Check and print matches before replacement using UTF-8 aware grep
     results_before=$(grep -n "$FF_RANGE" "$file" | LC_ALL=C sort -u)
-    if [ -n "$results_before" ]; then
-        echo "$file before:"
-        echo "$results_before"
+    if [ -z "$results_before" ]; then
+        continue
     fi
+    echo "$file before:"
+    echo "$results_before"
 
     # 4. Create a secure temporary file using mktemp
     tmp_file=$(mktemp)

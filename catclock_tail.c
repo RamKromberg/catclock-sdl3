@@ -23,7 +23,7 @@
 
 void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						 int frame_idx, void* userdata) {
-	Uint8* buffer = (Uint8*) target_buffer;
+	uint8_t* buffer = (uint8_t*) target_buffer;
 	if (!buffer || sheet_w <= 0 || sheet_h <= 0)
 		return;
 
@@ -32,10 +32,10 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 	float shift_y = args ? args->offset_y : 0.0f;
 
 	bool is_halo = args && args->force_halo_color;
-	Uint8 palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
+	uint8_t palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
 
 	int total_tail_frames = ctx.tail_atlas.total_frames > 0 ? ctx.tail_atlas.total_frames : 1;
-	float progress = ((float) frame_idx + 0.5f) / (float) total_tail_frames;
+	float progress = ((float) frame_idx + 1.0f) / (float) total_tail_frames;
 	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
 
@@ -50,7 +50,7 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 
 	float internal_unit_ratio = (float) ctx.tail_atlas.cell_w / 96.0f;
 	float pivot_x
-		= (float) cell_x + ((float) ctx.tail_atlas.cell_w / 2.0f) - (2.0f * internal_unit_ratio);
+		= (float) cell_x + ((float) ctx.tail_atlas.cell_w / 2.0f) - (1.0f * internal_unit_ratio);
 	float pivot_y = (float) cell_y + (12.0f * internal_unit_ratio);
 
 	float horizontal_cushion = is_halo ? (0.35f * internal_unit_ratio) : 0.0f;

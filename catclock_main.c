@@ -328,6 +328,7 @@ int main(int argc, char* argv[]) {
 		SDL_GL_SwapWindow(ctx.window);
 
 		/* Standard execution logging step tracking loop metrics */
+#ifdef DEBUG_TELEMETRY_SHUFFLE
 		time_t raw_now = time(NULL);
 		struct tm* t_struct = localtime(&raw_now);
 		Diagnostics_LogShufflerIndex("Needle_Hour", (t_struct->tm_hour % 12), TOTAL_HAND_PHASES);
@@ -336,6 +337,7 @@ int main(int argc, char* argv[]) {
 		Diagnostics_LogShufflerIndex("Appendage_Tail",
 									 (int) (ctx.current_frame_step % (ctx.target_fps * 2)),
 									 (ctx.target_fps * 2));
+#endif
 
 		SDL_Delay(1000 / ctx.target_fps);
 		ctx.current_frame_step++;

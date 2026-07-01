@@ -35,74 +35,101 @@ void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uin
 	}
 }
 
-/**
- * FillSoftwareTriangle
- * Standard top/bottom-split flat triangle rasterizer. Fixed to prevent
- * sub-pixel gap bleeding across complex multi-triangle hand layouts.
- */
+// GPU Center-Tester Rasterizer
 void FillSoftwareTriangle(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
 						  int width, int height, uint8_t token) {
-	/* Sort vertices vertically by Y coordinate: y0 <= y1 <= y2 */
-	if (y0 > y1) {
-		int tx = x0;
-		x0 = x1;
-		x1 = tx;
-		int ty = y0;
-		y0 = y1;
-		y1 = ty;
+	// 1. Compute Bounding Box (Clamped strictly to canvas limits)
+	int min_x = (x0 < x1) ? ((x0 < x2) ? x0 : x2) : ((x1 < x2) ? x1 : x2);
+	int max_x = (x0 > x1) ? ((x0 > x2) ? x0 : x2) : ((x1 > x2) ? x1 : x2);
+	int min_y = (y0 < y1) ? ((y0 < y2) ? y0 : y2) : ((y1 < y2) ? y1 : y2);
+	int max_y = (y0 > y1) ? ((y0 > y2) ? y0 : y2) : ((y1 > y2) ? y1 : y2);
+
+#ifdef DEBUG_TELEMETRY_TRIANGLE
+	int raw_area = (max_x - min_x + 1) * (max_y - min_y + 1);
+#endif
+
+	if (min_x < 0) {
+		min_x = 0;
 	}
-	if (y0 > y2) {
-		int tx = x0;
-		x0 = x2;
-		x2 = tx;
-		int ty = y0;
-		y0 = y2;
-		y2 = ty;
+	if (max_x >= width) {
+		max_x = width - 1;
 	}
-	if (y1 > y2) {
-		int tx = x1;
-		x1 = x2;
-		x2 = tx;
-		int ty = y1;
-		y1 = y2;
-		y2 = ty;
+	if (min_y < 0) {
+		min_y = 0;
+	}
+	if (max_y >= height) {
+		max_y = height - 1;
 	}
 
-	if (y0 == y2)
-		return;
+#ifdef DEBUG_TELEMETRY_TRIANGLE
+	int clamped_area = (max_x - min_x + 1) * (max_y - min_y + 1);
+#endif
 
-	int total_height = y2 - y0;
-	for (int i = 0; i < total_height; i++) {
-		int current_y = y0 + i;
-		if (current_y < 0 || current_y >= height)
-			continue;
+	// 2. Precompute Edge Setup Delta Vectors
+	int dx01 = x1 - x0, dy01 = y1 - y0;
+	int dx12 = x2 - x1, dy12 = y2 - y1;
+	int dx20 = x0 - x2, dy20 = y0 - y2;
 
-		bool second_half = i > (y1 - y0) || y1 == y0;
-		int segment_height = second_half ? (y2 - y1) : (y1 - y0);
-		if (segment_height == 0)
-			continue;
+	// 3. Determine Top/Left Flags for Tie-Breaking (Enforces hardware edge exclusion)
+	bool tl0 = (dy01 < 0) || (dy01 == 0 && dx01 > 0);
+	bool tl1 = (dy12 < 0) || (dy12 == 0 && dx12 > 0);
+	bool tl2 = (dy20 < 0) || (dy20 == 0 && dx20 > 0);
 
-		float alpha = (float) i / (float) total_height;
-		float beta = (float) (i - (second_half ? (y1 - y0) : 0)) / (float) segment_height;
+#ifdef DEBUG_TELEMETRY_TRIANGLE
+	int tri_double_area = dx01 * dy12 - dy01 * dx12;
+	bool is_ccw = (tri_double_area > 0);
 
-		int ax = x0 + (int) ((float) (x2 - x0) * alpha);
-		int bx = second_half ? (x1 + (int) ((float) (x2 - x1) * beta))
-							 : (x0 + (int) ((float) (x1 - x0) * beta));
+	// Filter logging footprint down strictly to high-value clock needle entities
+	if (token == 2 || token == 3 || token == 4) {
+		printf("[GPU RASTER AUDIT] UNIT_START | Token: %u | Winding: %s | Analytical Double Area: "
+			   "%d\n",
+			   token, is_ccw ? "CCW" : "CW", tri_double_area);
+		printf("  -> Boundary footprint: Raw Area: %d px | Clamped Screen Area: %d px\n", raw_area,
+			   clamped_area);
+		printf("  -> Geometry Vertices:  V0(%d,%d) -> V1(%d,%d) -> V2(%d,%d)\n", x0, y0, x1, y1, x2,
+			   y2);
+	}
+#endif
 
-		if (ax > bx) {
-			int tx = ax;
-			ax = bx;
-			bx = tx;
+	// 4. Processing Loop matching GLSL Fragment Generation Behavior
+	for (int y = min_y; y <= max_y; y++) {
+		float px_y = (float) y + 0.5f; // Sample at half-pixel center vertically
+		int pixels_generated_on_row = 0;
+
+		for (int x = min_x; x <= max_x; x++) {
+			float px_x = (float) x + 0.5f; // Sample at half-pixel center horizontally
+
+			// Cross product vector magnitude checks (Edge Functional Distance)
+			float w0 = (px_x - x0) * dy01 - (px_y - y0) * dx01;
+			float w1 = (px_x - x1) * dy12 - (px_y - y1) * dx12;
+			float w2 = (px_x - x2) * dy20 - (px_y - y2) * dx20;
+
+			// Handle Winding Order Agnosticism (Evaluates both CW and CCW layouts smoothly)
+			bool inside_ccw = (w0 > 0 || (w0 == 0 && tl0)) && (w1 > 0 || (w1 == 0 && tl1))
+				&& (w2 > 0 || (w2 == 0 && tl2));
+
+			bool inside_cw = (w0 < 0 || (w0 == 0 && !tl0)) && (w1 < 0 || (w1 == 0 && !tl1))
+				&& (w2 < 0 || (w2 == 0 && !tl2));
+
+			if (inside_ccw || inside_cw) {
+				buffer[(y * width) + x] = token;
+				pixels_generated_on_row++;
+			}
 		}
 
-		/* Enforce tight bounding box clamping across the horizontal fill span */
-		int start_x = ax < 0 ? 0 : ax;
-		int end_x = bx >= width ? (width - 1) : bx;
-
-		for (int cx = start_x; cx <= end_x; cx++) {
-			buffer[(current_y * width) + cx] = token;
+#ifdef DEBUG_TELEMETRY_TRIANGLE
+		if ((token == 2 || token == 3 || token == 4) && pixels_generated_on_row > 0) {
+			printf("  [Row Allocation Execution] Row Y: %d | Generated Span: %d px wide\n", y,
+				   pixels_generated_on_row);
 		}
+#endif
 	}
+
+#ifdef DEBUG_TELEMETRY_TRIANGLE
+	if (token == 2 || token == 3 || token == 4) {
+		printf("[GPU RASTER AUDIT] UNIT_COMPLETE\n\n");
+	}
+#endif
 }
 
 /* ==========================================================================

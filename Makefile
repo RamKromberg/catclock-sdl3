@@ -54,9 +54,31 @@ catclock_shaders.h: ./shaders/catclock.glsl
 	sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders.h --slang glsl430
 
 # Deterministic source formatting utility target
+FORMAT_NONTARGETS = catclock_shaders.h
 format:
 	#clang-format -i $(SRCS) $(HEADERS)
+	@for file in catclock_*.c catclock_*.h; do \
+		[ -f "$$file" ] || continue; \
+		skip=0; \
+		for nontarget in $(FORMAT_NONTARGETS); do \
+			case "$$file" in \
+				$$nontarget | */$$nontarget) skip=1; break ;; \
+			esac; \
+		done; \
+		if [ $$skip -eq 0 ]; then \
+			clang-format -i "$$file"; \
+		fi; \
+	done
 	clang-format -i catclock_*.c catclock_*.h
+
+	# formats the inner code syntax blocks via glsl_analyzer
+	# runs an alignment pass to clean trailing whitespace and flush #pragma lines left
+	for file in shaders/*.glsl; do \
+		glsl_analyzer --format "$$file" > "$$file.tmp" && \
+		sed -i 's/[[:space:]]*$$//' "$$file.tmp" && \
+		sed -i 's/^[[:space:]]*#pragma/#pragma/' "$$file.tmp" && \
+		mv "$$file.tmp" "$$file"; \
+	done
 
 # AUTOMATED ASSET BAKE OPTION FOR ROADMAP REPRODUCIBILITY
 # === FILE: Makefile === Update the asset target block cleanly
