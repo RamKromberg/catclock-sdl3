@@ -32,6 +32,7 @@ let
       chmod +x $out/bin/sokol-shdc
     '';
   };
+
 in
 
 pkgs.mkShell {
@@ -55,6 +56,7 @@ pkgs.mkShell {
     #amdgpu_top
     sdl3
     sokolCompiler
+    glsl_analyzer # formatter. use `#pragma sokol` to prefix sokol tags ( https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md )
     libGL.dev
     libx11.dev
     wayland.dev
