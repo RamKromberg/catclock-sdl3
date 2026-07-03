@@ -32,7 +32,9 @@ let
       chmod +x $out/bin/sokol-shdc
     '';
   };
-
+  my-python-env = pkgs.python3.withPackages (ps: with ps; [
+    numpy
+  ]); #approximate the clockface lame curve and bake it to the c source instead of wasting cycles on it during live rendering
 in
 
 pkgs.mkShell {
@@ -54,12 +56,14 @@ pkgs.mkShell {
     #nvtopPackages.full
     #intel-gpu-tools
     #amdgpu_top
+    my-python-env
     sdl3
     sokolCompiler
     glsl_analyzer # formatter. use `#pragma sokol` to prefix sokol tags ( https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md )
     libGL.dev
     libx11.dev
     wayland.dev
+    mesa # for the reference rasterizers
   ];
 
   buildInputs = [
@@ -77,7 +81,7 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:40:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:40:00" xclock
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
-    
+
     if [ ! -d "./sokol" ]; then
       ln -sfn "${sokolSrc}" ./sokol
     fi
@@ -89,12 +93,14 @@ pkgs.mkShell {
 
     export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
 
-    # Export the dev prefix for compilation headers/import libs
     export WINDOWS_SDL_PREFIX="${windowsPkgs.sdl3}"
 
     # Capture the runtime package path where the real Windows DLL lives
     export WINDOWS_SDL_BIN="${windowsPkgs.sdl3.bin or windowsPkgs.sdl3}"
     
+    export DEVSHELL_MESA_SRC="${pkgs.mesa.src}"
+    export DEVSHELL_MESA="${pkgs.mesa}"
+
     echo "=================================================="
     echo " Kit-Cat Clock Cross-Platform Compiler Shell Active "
     echo "   -> Run 'make' to compile for native Linux"

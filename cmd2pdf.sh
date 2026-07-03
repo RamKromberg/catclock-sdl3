@@ -34,7 +34,7 @@ MANPAGER=cat; export MANPAGER
 CLICOLOR=1; export CLICOLOR
 CLICOLOR_FORCE=1; export CLICOLOR_FORCE
 GREP_COLOR='01;31'; export GREP_COLOR
-GREP_COLORS='ms=01;31:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36'; export GREP_COLORS
+GREP_COLORS='ms=:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36'; export GREP_COLORS
 # ==============================================================================
 
 # Extract target PDF filename from the first argument

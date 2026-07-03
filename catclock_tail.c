@@ -101,8 +101,8 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 	int sx3 = FX_TRANSFORM_X(half_width, stem_end_y);
 	int sy3 = FX_TRANSFORM_Y(half_width, stem_end_y);
 
-	FillSoftwareTriangle(buffer, sx0, sy0, sx1, sy1, sx2, sy2, sheet_w, sheet_h, palette_idx);
-	FillSoftwareTriangle(buffer, sx1, sy1, sx3, sy3, sx2, sy2, sheet_w, sheet_h, palette_idx);
+	DrawTriangleLegacy(buffer, sx0, sy0, sx1, sy1, sx2, sy2, sheet_w, sheet_h, palette_idx);
+	DrawTriangleLegacy(buffer, sx1, sy1, sx3, sy3, sx2, sy2, sheet_w, sheet_h, palette_idx);
 
 	// =================================================================
 	// PART 2: THE UNIFIED MESH HOOK & HOOK CAP ASSEMBLY
@@ -158,10 +158,10 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 		int py_ix = FX_TRANSFORM_Y(local_ix_x, local_ix_y);
 
 		if (i > 0) {
-			FillSoftwareTriangle(buffer, last_ox, last_oy, px_ox, py_ox, last_ix, last_iy, sheet_w,
-								 sheet_h, palette_idx);
-			FillSoftwareTriangle(buffer, px_ox, py_ox, px_ix, py_ix, last_ix, last_iy, sheet_w,
-								 sheet_h, palette_idx);
+			DrawTriangleLegacy(buffer, last_ox, last_oy, px_ox, py_ox, last_ix, last_iy, sheet_w,
+							   sheet_h, palette_idx);
+			DrawTriangleLegacy(buffer, px_ox, py_ox, px_ix, py_ix, last_ix, last_iy, sheet_w,
+							   sheet_h, palette_idx);
 		}
 		last_ox = px_ox;
 		last_oy = py_ox;

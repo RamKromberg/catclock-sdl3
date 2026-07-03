@@ -10,128 +10,169 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 magick -size 1x1 xc:red "$TMP_DIR/color_anchor.png"
 
 for f in *.pam; do
-    magick "$f" "$TMP_DIR/color_anchor.png" +append -crop 100%x100%+0+0 +repage -gravity East -chop 1x0 "${f%.pam}.png"
+    # Get the count of non-transparent pixels
+    pixel_count=$(magick "$f" -alpha extract -threshold 0 -format "%[fx:int(mean*w*h)]" info:)
+
+    if [ "$pixel_count" -eq 0 ]; then
+        # Delete the empty file immediately
+        echo "$f" is empty. Deleting...
+        rm "$f"
+    else
+        # Process the file normally if it contains visible pixels
+        magick "$f" "$TMP_DIR/color_anchor.png" +append -crop 100%x100%+0+0 +repage -gravity East -chop 1x0 "${f%.pam}.png"
+    fi
 done
+
+# Clean up any remaining valid .pam files
 rm -f *.pam
 
 # ================================================================================
 # EVALUATE GEOMETRY COEFFICIENTS DYNAMICALLY (STAGE 2)
 # ================================================================================
-LIVE_W=$(identify -format "%w" dump_hours_atlas.png)
-SCALE_FACTOR=$(echo "scale=4; $LIVE_W / 640" | bc)
+if [ -f dump_seconds_atlas.png ]; then
+    LIVE_W=$(identify -format "%w" dump_seconds_atlas.png)
+    SCALE_FACTOR=$(echo "scale=4; $LIVE_W / 640" | bc)
+    CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    C_W_MINUS_1=$((CELL_W - 1))
+    C_H_MINUS_1=$((CELL_H - 1))
 
-CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
-CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-C_W_MINUS_1=$((CELL_W - 1))
-C_H_MINUS_1=$((CELL_H - 1))
+    STROKE_W=$(echo "$SCALE_FACTOR / 1" | bc | cut -d. -f1)
+    if [ "$STROKE_W" -lt 1 ]; then
+        STROKE_W=1
+    fi
 
-STROKE_W=$(echo "$SCALE_FACTOR / 1" | bc | cut -d. -f1)
-if [ "$STROKE_W" -lt 1 ]; then
-    STROKE_W=1
-fi
+    IS_FRACTIONAL=$(echo "$SCALE_FACTOR" | grep "\." || true)
 
-IS_FRACTIONAL=$(echo "$SCALE_FACTOR" | grep "\." || true)
+    if [ -n "$IS_FRACTIONAL" ]
+    then
+        # PATH A: Fractional Half-Steps Math
+        X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    else
+        # PATH B: Whole Integer Scale Steps
+        X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    fi
 
-if [ -n "$IS_FRACTIONAL" ]
-then
-    # PATH A: Fractional Half-Steps Math
-    X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
-else
-    # PATH B: Whole Integer Scale Steps
-    X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
-fi
+    X_END=$((X_START + STROKE_W - 1))
+    Y_END=$((Y_START + STROKE_W - 1))
 
-X_END=$((X_START + STROKE_W - 1))
-Y_END=$((Y_START + STROKE_W - 1))
-
-RECT_X1=$(echo "2 * $SCALE_FACTOR" | bc | cut -d. -f1)
-RECT_Y1=$(echo "6 * $SCALE_FACTOR" | bc | cut -d. -f1)
-RECT_X2=$(echo "60 * $SCALE_FACTOR" | bc | cut -d. -f1)
-RECT_Y2=$(echo "88 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-FACE_CROP_W=$(echo "59 * $SCALE_FACTOR" | bc | cut -d. -f1)
-FACE_CROP_H=$(echo "83 * $SCALE_FACTOR" | bc | cut -d. -f1)
-FACE_X=$(echo "20 * $SCALE_FACTOR" | bc | cut -d. -f1)
-FACE_Y=$(echo "100 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-P1_CROP_W=$(echo "640 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P1_CROP_H=$(echo "576 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P2_CELL_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P3_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P2_W_MINUS_1=$((P2_CELL_W - 1))
-P2_H_MINUS_1=$((P3_CELL_H - 1))
-
-P2_LINE1_START=$(echo "40 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P2_LINE1_END=$((P2_LINE1_START + STROKE_W - 1))
-P2_LINE2_START=$(echo "52 * $SCALE_FACTOR" | bc | cut -d. -f1)
-P2_LINE2_END=$((P2_LINE2_START + STROKE_W - 1))
-
-VIEW_W=$(echo "150 * $SCALE_FACTOR" | bc | cut -d. -f1)
-VIEW_H=$(echo "300 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-BODY_CROP_W=$(echo "101 * $SCALE_FACTOR" | bc | cut -d. -f1)
-BODY_CROP_H=$(echo "201 * $SCALE_FACTOR" | bc | cut -d. -f1)
-BODY_X=$(echo "24 * $SCALE_FACTOR" | bc | cut -d. -f1)
-BODY_Y=$(echo "12 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-TAIL_CROP_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-TAIL_CROP_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-TAIL_X=$(echo "27 * $SCALE_FACTOR" | bc | cut -d. -f1)
-TAIL_Y=$(echo "204 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-# --------------------------------------------------------------------------------
-# UNIVERSAL STEP-PATTERN RASTER CORRECTION LAYER (1x TO 10x)
-# --------------------------------------------------------------------------------
-calculate_geometry_offsets() {
-    REAL_CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    REAL_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-    REAL_FACE_W=$(identify -format "%w" "$TMP_DIR/tmp_face.png")
-    REAL_FACE_H=$(identify -format "%h" "$TMP_DIR/tmp_face.png")
-
-    IM_LEFT=$(( (REAL_CELL_W - REAL_FACE_W) / 2 ))
-    IM_TOP=$(( (REAL_CELL_H - REAL_FACE_H) / 2 ))
-
-    TARGET_X=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    TARGET_Y=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
-    LOCAL_FOCAL_X=$(( (REAL_FACE_W * 29) / 59 ))
-    LOCAL_FOCAL_Y=$(( (REAL_FACE_H * 39) / 83 ))
-
-    OFF_X=$(( TARGET_X - IM_LEFT - LOCAL_FOCAL_X ))
-    OFF_Y=$(( TARGET_Y - IM_TOP - LOCAL_FOCAL_Y ))
-
-    if [ "$OFF_X" -ge 0 ]; then GEOM_X="+$OFF_X"; else GEOM_X="$OFF_X"; fi
-    if [ "$OFF_Y" -ge 0 ]; then GEOM_Y="+$OFF_Y"; else GEOM_Y="$OFF_Y"; fi
-
-    # 🎯 OUTER YELLOW FRAME BOUNDARIES (Snaps exactly to the asset frame edges)
     RECT_X1=$(echo "2 * $SCALE_FACTOR" | bc | cut -d. -f1)
     RECT_Y1=$(echo "6 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    RECT_X2=$(echo "60 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    RECT_Y2=$(echo "88 * $SCALE_FACTOR" | bc | cut -d. -f1)
 
-    SCALED_SPAN_W=$(echo "59 * $SCALE_FACTOR" | bc | cut -d. -f1)
-    SCALED_SPAN_H=$(echo "83 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    FACE_CROP_W=$(echo "($SCALE_FACTOR * 59) + 0.5" | bc | cut -d. -f1)
+    FACE_CROP_H=$(echo "($SCALE_FACTOR * 83) + 0.5" | bc | cut -d. -f1)
+    FACE_X=$(echo "($SCALE_FACTOR * 20) + 0.5" | bc | cut -d. -f1)
+    FACE_Y=$(echo "($SCALE_FACTOR * 100) + 0.5" | bc | cut -d. -f1)
 
-    RECT_X2=$(( RECT_X1 + SCALED_SPAN_W - 1 ))
-    RECT_Y2=$(( RECT_Y1 + SCALED_SPAN_H - 1 ))
+    P1_CROP_W=$(echo "640 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P1_CROP_H=$(echo "576 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_CELL_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P3_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_W_MINUS_1=$((P2_CELL_W - 1))
+    P2_H_MINUS_1=$((P3_CELL_H - 1))
 
-    # ✂️ INNER CUTOUT BOUNDARIES (Pushed inward by exactly STROKE_W pixels)
-    INNER_X1=$(( RECT_X1 + STROKE_W ))
-    INNER_Y1=$(( RECT_Y1 + STROKE_W ))
-    INNER_X2=$(( RECT_X2 - STROKE_W ))
-    INNER_Y2=$(( RECT_Y2 - STROKE_W ))
-}
+    P2_LINE1_START=$(echo "40 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_LINE1_END=$((P2_LINE1_START + STROKE_W - 1))
+    P2_LINE2_START=$(echo "52 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_LINE2_END=$((P2_LINE2_START + STROKE_W - 1))
+
+    VIEW_W=$(echo "150 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    VIEW_H=$(echo "300 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+    BODY_CROP_W=$(echo "101 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    BODY_CROP_H=$(echo "201 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    BODY_X=$(echo "24 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    BODY_Y=$(echo "12 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+    TAIL_CROP_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    TAIL_CROP_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    TAIL_X=$(echo "27 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    TAIL_Y=$(echo "204 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+    # --------------------------------------------------------------------------------
+    # UNIVERSAL STEP-PATTERN RASTER CORRECTION LAYER (1x TO 10x)
+    # --------------------------------------------------------------------------------
+    calculate_geometry_offsets() {
+        REAL_CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        REAL_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+        if [ -f "$TMP_DIR/tmp_face.png" ]; then
+            REAL_FACE_W=$(identify -format "%w" "$TMP_DIR/tmp_face.png")
+            REAL_FACE_H=$(identify -format "%h" "$TMP_DIR/tmp_face.png")
+        fi
+
+        IM_LEFT=$(( (REAL_CELL_W - REAL_FACE_W) / 2 ))
+        IM_TOP=$(( (REAL_CELL_H - REAL_FACE_H) / 2 ))
+
+        TARGET_X=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        TARGET_Y=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+        LOCAL_FOCAL_X=$(( (REAL_FACE_W * 29) / 59 ))
+        LOCAL_FOCAL_Y=$(( (REAL_FACE_H * 39) / 83 ))
+
+        OFF_X=$(( TARGET_X - IM_LEFT - LOCAL_FOCAL_X ))
+        OFF_Y=$(( TARGET_Y - IM_TOP - LOCAL_FOCAL_Y ))
+
+        if [ "$OFF_X" -ge 0 ]; then GEOM_X="+$OFF_X"; else GEOM_X="$OFF_X"; fi
+        if [ "$OFF_Y" -ge 0 ]; then GEOM_Y="+$OFF_Y"; else GEOM_Y="$OFF_Y"; fi
+
+        # 🎯 OUTER YELLOW FRAME BOUNDARIES (Snaps exactly to the asset frame edges)
+        RECT_X1=$(echo "2 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        RECT_Y1=$(echo "6 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+        SCALED_SPAN_W=$(echo "59 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        SCALED_SPAN_H=$(echo "83 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+        RECT_X2=$(( RECT_X1 + SCALED_SPAN_W - 1 ))
+        RECT_Y2=$(( RECT_Y1 + SCALED_SPAN_H - 1 ))
+
+        # ✂️ INNER CUTOUT BOUNDARIES (Pushed inward by exactly STROKE_W pixels)
+        INNER_X1=$(( RECT_X1 + STROKE_W ))
+        INNER_Y1=$(( RECT_Y1 + STROKE_W ))
+        INNER_X2=$(( RECT_X2 - STROKE_W ))
+        INNER_Y2=$(( RECT_Y2 - STROKE_W ))
+    }
+
+    # ================================================================================
+    # PIPELINE 1: CLOCK HAND VALIDATION
+    # ================================================================================
+    calculate_geometry_offsets
+
+    for hand in hours minutes seconds; do
+        if [ ! -f "dump_${hand}_atlas.png" ]; then
+            continue
+        fi
+        magick dump_${hand}_atlas.png "$TMP_DIR/color_anchor.png" +append \
+            \( -size ${CELL_W}x${CELL_H} xc:none \
+            +antialias -stroke blue -strokewidth ${STROKE_W} -fill none -draw "rectangle 0,0 ${C_W_MINUS_1},${C_H_MINUS_1}" \
+            -gravity Forget -geometry +0+0 -compose Over \
+            -stroke none -fill "#FFFF00BF" \
+            -draw "rectangle ${RECT_X1},${RECT_Y1} ${RECT_X2},${INNER_Y1}" \
+            -draw "rectangle ${RECT_X1},${INNER_Y2} ${RECT_X2},${RECT_Y2}" \
+            -draw "rectangle ${RECT_X1},${INNER_Y1} ${INNER_X1},${INNER_Y2}" \
+            -draw "rectangle ${INNER_X2},${INNER_Y1} ${RECT_X2},${INNER_Y2}" \
+            -stroke none -fill "#008000BF" -draw "rectangle ${X_START},0 ${X_END},${C_H_MINUS_1}" -draw "rectangle 0,${Y_START} ${C_W_MINUS_1},${Y_END}" \
+            -write mpr:mygrid +delete \) \
+            \( +clone -tile mpr:mygrid -draw "color 0,0 reset" \) \
+            -compose Dst_Over -composite \
+            -crop ${P1_CROP_W}x${P1_CROP_H}+0+0 +repage dump_${hand}_atlas_validation.png
+    done
+else
+    echo dump_seconds_atlas.png not found.
+fi
+exit # while working on hands...
 
 # ================================================================================
-# PIPELINE 1: CLOCK FACE EXTRACTION PASS
+# PIPELINE 2: CLOCK FACE COMPOSITION
 # ================================================================================
 magick dump_material_composition.png "$TMP_DIR/color_anchor.png" +append \
     -crop ${FACE_CROP_W}x${FACE_CROP_H}+${FACE_X}+${FACE_Y} +repage \
     "$TMP_DIR/color_anchor.png" +append \
     -crop ${FACE_CROP_W}x${FACE_CROP_H}+0+0 +repage "$TMP_DIR/tmp_face.png"
-
-calculate_geometry_offsets
 
 # EXCLUSIVE BLITTED DIAGNOSTIC SHEET: Hands-free using partitioned scale math
 magick -size ${CELL_W}x${CELL_H} xc:none "$TMP_DIR/tmp_face.png" \
@@ -146,25 +187,10 @@ magick -size ${CELL_W}x${CELL_H} xc:none "$TMP_DIR/tmp_face.png" \
     -stroke none -fill "#008000BF" -draw "rectangle ${X_START},0 ${X_END},${C_H_MINUS_1}" -draw "rectangle 0,${Y_START} ${C_W_MINUS_1},${Y_END}" \
     dump_face_only_validation.png
 
-# ================================================================================
-# PIPELINE 1 CONTINUED: CLOCK HAND VALIDATION LOOP
-# ================================================================================
 for hand in hours minutes seconds; do
-    magick dump_${hand}_atlas.png "$TMP_DIR/color_anchor.png" +append \
-        \( -size ${CELL_W}x${CELL_H} xc:none \
-        +antialias -stroke blue -strokewidth ${STROKE_W} -fill none -draw "rectangle 0,0 ${C_W_MINUS_1},${C_H_MINUS_1}" \
-        -gravity Forget -geometry +0+0 -compose Over \
-        -stroke none -fill "#FFFF00BF" \
-        -draw "rectangle ${RECT_X1},${RECT_Y1} ${RECT_X2},${INNER_Y1}" \
-        -draw "rectangle ${RECT_X1},${INNER_Y2} ${RECT_X2},${RECT_Y2}" \
-        -draw "rectangle ${RECT_X1},${INNER_Y1} ${INNER_X1},${INNER_Y2}" \
-        -draw "rectangle ${INNER_X2},${INNER_Y1} ${RECT_X2},${INNER_Y2}" \
-        -stroke none -fill "#008000BF" -draw "rectangle ${X_START},0 ${X_END},${C_H_MINUS_1}" -draw "rectangle 0,${Y_START} ${C_W_MINUS_1},${Y_END}" \
-        -write mpr:mygrid +delete \) \
-        \( +clone -tile mpr:mygrid -draw "color 0,0 reset" \) \
-        -compose Dst_Over -composite \
-        -crop ${P1_CROP_W}x${P1_CROP_H}+0+0 +repage dump_${hand}_atlas_validation.png
-
+    if [ ! -f "dump_${hand}_atlas.png" ]; then
+        continue
+    fi
     magick dump_${hand}_atlas.png "$TMP_DIR/color_anchor.png" +append \
         \( -size ${CELL_W}x${CELL_H} xc:none \
         "$TMP_DIR/tmp_face.png" -gravity center -geometry ${GEOM_X}${GEOM_Y} -compose Over -composite \
@@ -183,7 +209,7 @@ for hand in hours minutes seconds; do
 done
 
 # ================================================================================
-# PIPELINE 2: TAIL VALIDATION PASS
+# PIPELINE 3: TAIL VALIDATION
 # ================================================================================
 magick dump_tail_body_atlas.png "$TMP_DIR/color_anchor.png" +append \
     \( -size ${P2_CELL_W}x${CELL_H} xc:none \
@@ -198,7 +224,7 @@ magick dump_tail_body_atlas.png "$TMP_DIR/color_anchor.png" +append \
     -crop ${P2_CROP_W}x${P2_CROP_H}+0+0 +repage dump_tail_atlas_validation.png
 
 # ================================================================================
-# PIPELINE 3: VIEWPORT COMPOSITION EMULATION
+# PIPELINE 4: VIEWPORT COMPOSITION
 # ================================================================================
 echo "[+] Emulating transparent ${VIEW_W}x${VIEW_H} viewports with parameterized constraints..."
 

@@ -152,7 +152,9 @@ int main(int argc, char* argv[]) {
 	int target_w = (int) (baseline_w * scale);
 	int target_h = (int) (baseline_h * scale);
 
+#ifndef TEST_MODE
 	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL;
+
 	if (!ctx.use_decorations) {
 		window_flags |= (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT);
 	}
@@ -200,10 +202,6 @@ int main(int argc, char* argv[]) {
 	}
 	printf("[Trace] Sokol Core GFX successfully attached to standard rendering pipeline.\n");
 
-	// === FILE: catclock_main.c ===
-	// Adjunct lines: Replace the block starting right after sg_setup(&sokol_description); down to
-	// the cleanup phase before return 0;
-
 	struct CatClock_XbmLibrary* runtime_xbm_handle = CatClock_InitXbmLibrary(NULL);
 	if (!runtime_xbm_handle) {
 		fprintf(
@@ -216,10 +214,7 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
-
-	/* ==========================================================================
-	STAGE 2: DETERMINISTIC INTERACTIVE STEP VALIDATION LOOP
-	========================================================================== */
+#endif
 	printf("[Verification] Entering interactive runtime event processing layout loop...\n");
 
 	struct {
@@ -303,18 +298,27 @@ int main(int argc, char* argv[]) {
 
 		/* Regenerate asset textures on the CPU only when cache check state flags shift */
 		if (ctx.texture_cache_stale) {
+#ifndef TEST_MODE
 			CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &hour_cfg);
 			CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &min_cfg);
+#endif
 			CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &sec_cfg);
+#ifdef TEST_MODE
+			(void) hour_cfg;
+			(void) min_cfg;
+			(void) tail_data;
+			running = false;
+#endif
+#ifndef TEST_MODE
 			CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
 										CatClock_ShaderEyes, NULL); // Fixed to ctx.target_fps
 			CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
 										CatClock_ShaderTail, &tail_data);
-
 			Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+#endif
 			ctx.texture_cache_stale = false;
 			printf("[Trace] Dynamic textures cached and committed to disk files at half-step: %u\n",
 				   ctx.current_half_steps);
@@ -352,7 +356,7 @@ int main(int argc, char* argv[]) {
 	CatClock_DestroyComputeAtlas(&ctx.seconds_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.eyes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.tail_atlas);
-
+#ifndef TEST_MODE
 	/* RE-ALIGNED: Free resources clean via local stack container */
 	if (runtime_xbm_handle) {
 		CatClock_DestroyXbmLibrary(runtime_xbm_handle);
@@ -364,7 +368,7 @@ int main(int argc, char* argv[]) {
 	SDL_GL_DestroyContext(gl_context);
 	SDL_DestroyWindow(ctx.window);
 	SDL_Quit();
-
+#endif
 	printf("[Trace] Execution Context terminated cleanly.\n");
 	return 0;
 }

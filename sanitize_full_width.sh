@@ -192,6 +192,9 @@ for pattern in $file_targets; do
         -e "y/$KEY_ALPHA_LO/$VAL_ALPHA_LO/" \
         "$file" > "$tmp_file"
 
+    # Remove En-Space
+    #sed -i 's/\xe2\x80\x82/ /g' "$tmp_file"
+
     # Move back over original file
     mv "$tmp_file" "$file"
     

@@ -17,325 +17,527 @@
 #include "catclock_shared.h"
 #include <math.h>
 #include <stdlib.h>
+#include <stdio.h>
+
+const int TEXTURE_CELL_W = 64;
+const int TEXTURE_CELL_H = 96;
+const int RELATIVE_FOCAL_X = 29;
+const int RELATIVE_FOCAL_Y = 39;
+const int ENVELOPE_PAD_X = 2;
+const int ENVELOPE_PAD_Y = 6;
+const int PIVOT_AXIS_X = ENVELOPE_PAD_X + RELATIVE_FOCAL_X;
+const int PIVOT_AXIS_Y = ENVELOPE_PAD_Y + RELATIVE_FOCAL_Y;
+
+// ========================================================================
+// CONFIGURATION ROUTER
+// 0 = WIP PRODUCTION WORK SHADER (ACTUAL RASTER PIPELINE)
+// 1 = CENTERED TRIANGLE TEST
+// 2 = PIVOT-ANCHORED TRIANGLE TEST
+// 3 = CENTERED DIAMOND RASTER TEST
+// 4 = EXPLICIT CCW DIAMOND RASTER TEST
+// 5 = CROSS TEST (LINE TEST)
+// 6 = ISOLATION TEST A: PURE COUNTER-CLOCKWISE (CCW) VERTEX ORDER
+// 7 = ISOLATION TEST B: PURE CLOCKWISE (CW) VERTEX ORDER (FORCES ROTATION)
+// 8 = ISOLATION TEST C: SUBPIXEL SNAP AT EXACT EXPLICIT INTEGER BOUNDS
+// 9 = ISOLATION TEST D: FRACTIONAL BIAS OFFSET TEST (+0.5 PIXEL SHIFT)
+// ========================================================================
+#ifndef TEST_MODE
+#define TEST_MODE 0
+#endif
+
+typedef struct {
+	int dx; // Exact 1x horizontal pixel offset from focal center
+	int dy; // Exact 1x vertical pixel offset from focal center
+} HandMasterOffset;
+
+static const HandMasterOffset HAND_MASTER_OFFSETS[TOTAL_HAND_PHASES]
+	= { { 0, -39 },	  { 4, -39 },	{ 8, -38 },	  { 12, -37 },	{ 15, -35 },  { 19, -32 },
+		{ 22, -30 },  { 24, -27 },	{ 26, -24 },  { 27, -20 },	{ 28, -16 },  { 29, -13 },
+		{ 29, -10 },  { 29, -6 },	{ 29, -3 },	  { 29, 0 },	{ 29, 3 },	  { 29, 6 },
+		{ 29, 10 },	  { 29, 13 },	{ 29, 17 },	  { 29, 21 },	{ 28, 25 },	  { 26, 29 },
+		{ 23, 32 },	  { 20, 36 },	{ 17, 38 },	  { 13, 40 },	{ 9, 42 },	  { 5, 43 },
+		{ 0, 43 },	  { -5, 43 },	{ -9, 42 },	  { -13, 40 },	{ -17, 38 },  { -20, 35 },
+		{ -23, 32 },  { -26, 29 },	{ -28, 25 },  { -29, 21 },	{ -29, 17 },  { -29, 13 },
+		{ -29, 10 },  { -29, 6 },	{ -29, 3 },	  { -29, 0 },	{ -29, -3 },  { -29, -6 },
+		{ -29, -10 }, { -29, -13 }, { -28, -16 }, { -27, -20 }, { -26, -24 }, { -24, -26 },
+		{ -22, -30 }, { -19, -33 }, { -15, -35 }, { -12, -37 }, { -8, -38 },  { -4, -39 } };
+
+// Forward declarations sharing an identical layout payload profile
+static void DrawProductionFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx,
+								float scale, float px_f, float py_f, int px, int py,
+								uint8_t hand_color, uint8_t hand_halo);
+
+static void DrawTestFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx, float scale,
+						  float px_f, float py_f, int px, int py, uint8_t hand_color,
+						  uint8_t hand_halo);
+
+// ============================================================================
+// DRIFT-FREE GEOMETRIC GENERATION WRAPPERS
+// ============================================================================
 
 /**
- * @file catclock_hands.c
- * @brief Reference Integer Rasterization Pipeline for Dynamic Clock Hands.
- *
- * This module serves as the authoritative, pixel-accurate mathematical baseline
- * for the CatClock hand-rendering engine. It guarantees geometric symmetry,
- * structural proportion, and anamorphic stability across all 60 animation phases
- * without suffering from cardinal axis flattening, rounding drift, or sub-pixel
- * staircase clipping artifacts.
- *
- * DEVELOPER ROADMAP NOTE:
- * This layout is intentionally implemented as a software-backed CPU pass writing
- * to a 1D palette texture atlas array. Future optimization branches should preserve
- * this exact math model while porting into:
- *   1. Arbitrary Integer/Floating Scaling layers.
- *   2. Fixed 8-bit Anti-Aliasing (AA) sub-pixel weights.
- *   3. Modern GPU Vertex/Fragment Shader pipelines.
+ * TIER 1: CORE GEOMETRIC FUNCTION (Floating-Point)
+ * Computes pure continuous geometric endpoints.
  */
+static void CatClock_CalculateHandEndpointsFloat(int phase, float pivot_x, float pivot_y,
+												 float scale, float* out_end_x, float* out_end_y) {
+	if (phase < 0 || phase >= TOTAL_HAND_PHASES) {
+		if (out_end_x)
+			*out_end_x = pivot_x;
+		if (out_end_y)
+			*out_end_y = pivot_y;
+		return;
+	}
 
-/**
- * @brief Architectural trace helper preserved cleanly for mathematical reference.
- * @note Marked with standard unused attributes to avoid pipeline compilation alerts.
- */
-__attribute__((unused)) static void DrawDebugReferenceLine(Uint8* buffer, int atlas_w, int atlas_h,
-														   int x0, int y0, int x1, int y1,
-														   Uint8 color_idx) {
-	int dx = abs(x1 - x0);
-	int dy = abs(y1 - y0);
-	int sx = (x0 < x1) ? 1 : -1;
-	int sy = (y0 < y1) ? 1 : -1;
-	int err = dx - dy;
+	HandMasterOffset offset = HAND_MASTER_OFFSETS[phase];
 
-	while (1) {
-		PlotSoftwarePixel(buffer, x0, y0, atlas_w, atlas_h, color_idx);
-		if (x0 == x1 && y0 == y1) {
-			break;
-		}
-		int e2 = 2 * err;
-		if (e2 > -dy) {
-			err -= dy;
-			x0 += sx;
-		}
-		if (e2 < dx) {
-			err += dx;
-			y0 += sy;
-		}
+	if (out_end_x) {
+		*out_end_x = pivot_x + ((float) offset.dx * scale);
+	}
+	if (out_end_y) {
+		*out_end_y = pivot_y + ((float) offset.dy * scale);
 	}
 }
 
 /**
- * @brief Authoritative Master Software Raster Pass for Clock Hand Geometry.
- *
- * MATHEMATICAL METHODOLOGY SUMMARY:
- *   1. TIMELINE & ELLIPTICAL BOUNDS: Evaluates cyclical frame indices to update
- *      a dynamic boundary extension factor. This compensates for the off-center face
- *      pivot and matches the non-uniform boundaries of the dial.
- *   2. DESIGN SEGREGATION MATRIX: Assigns hard parameter metrics (base widths,
- *      pivot extensions, shoulder midpoint anchors, color targets, and fractional multipliers)
- *      uniquely parsed per hand instance payload.
- *   3. CONTINUOUS ISOTROPIC FIELDS: Computes trajectory angles and orthogonal width
- *      directions in pure, un-skewed circular space using floating point values. This blocks
- *      algebraic symmetry breakage and right-angled flattening.
- *   4. CENTERLINE GRIDS ANCHORING: Rounded center nodes are calculated synchronously
- *      to ensure the reference axis matches integer coordinates before width extrusion occurs.
- *   5. ABSOLUTE MIRRORED EXTRUSION: Processes sub-pixel width steps using distance magnitudes
- *      to guarantee identical pixel weights on both sides of the hand. Sub-pixel protection filters
- *      force minimal 1-pixel heights to counter staircase clipping.
- *   6. MULTI-PASS COMPOSITION HULL: Passes three distinct software triangles down to the raster
- *      loop, seamlessly layering a reinforcing tapered quad torso over a sharp full-length tip.
+ * TIER 2: GEOMETRIC WRAPPER (Integer Pass-through)
+ * Exposes raw un-biased scale metrics into integer coordinate properties.
  */
+__attribute__((unused)) static void
+CatClock_CalculateHandEndpoints(int phase, int pivot_x, int pivot_y, float scale, int cell_x,
+								int cell_y, int* out_end_x, int* out_end_y) {
+	float float_out_x = 0.0f;
+	float float_out_y = 0.0f;
+
+	CatClock_CalculateHandEndpointsFloat(phase, (float) pivot_x, (float) pivot_y, scale,
+										 &float_out_x, &float_out_y);
+
+	if (out_end_x)
+		*out_end_x = (int) roundf(float_out_x);
+	if (out_end_y)
+		*out_end_y = (int) roundf(float_out_y);
+
+	(void) cell_x;
+	(void) cell_y;
+}
+
+/**
+ * TIER 3: RASTERIZER COMPENSATION WRAPPER
+ * Direct master asset extraction layout loop. Performs scale mapping first, then
+ * rounds to the nearest grid step using roundf() to preserve geometric symmetry.
+ */
+static void CatClock_CalculateHandEndpointsRaster(int phase, float pivot_xf, float pivot_yf,
+												  float scale, int* out_piv_x, int* out_piv_y,
+												  int* out_end_x, int* out_end_y) {
+	int final_piv_x = (int) floorf(pivot_xf + 0.5f);
+	int final_piv_y = (int) floorf(pivot_yf + 0.5f);
+
+	int safe_phase = phase % TOTAL_HAND_PHASES;
+	if (safe_phase < 0)
+		safe_phase += TOTAL_HAND_PHASES;
+	HandMasterOffset offset = HAND_MASTER_OFFSETS[safe_phase];
+
+	int scaled_dx = (int) roundf((float) offset.dx * scale);
+	int scaled_dy = (int) roundf((float) offset.dy * scale);
+
+	if (out_piv_x)
+		*out_piv_x = final_piv_x;
+	if (out_piv_y)
+		*out_piv_y = final_piv_y;
+	if (out_end_x)
+		*out_end_x = final_piv_x + scaled_dx;
+	if (out_end_y)
+		*out_end_y = final_piv_y + scaled_dy;
+}
+
+// ============================================================================
+// MAIN PIPELINE ENTRY INTERFACE
+// ============================================================================
 void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						  int frame_idx, void* userdata) {
-	/* State variable blocks explicitly grouped at the top of the function module */
-	Uint8* buffer = (Uint8*) renderer;
-	int atlas_w = sheet_w;
-	int phase = frame_idx % TOTAL_HAND_PHASES;
-	int cell_w = ctx.hours_atlas.cell_w;
-	int cell_h = ctx.hours_atlas.cell_h;
+	uint8_t* buffer = (uint8_t*) renderer;
 
-	/* Decode active configuration tracking container safely off incoming stack frames */
+	// Unified Core Metric Pipeline
+	float scale = (float) ctx.current_half_steps / 2.0f;
+	float px_f = (float) cell_x + ((float) PIVOT_AXIS_X * scale);
+	float py_f = (float) cell_y + ((float) PIVOT_AXIS_Y * scale);
+	int px = (int) roundf(px_f);
+	int py = (int) roundf(py_f);
+
+	// Unified Configuration & Palette Block
 	struct {
 		int type;
 		SDL_Color color;
 	}* hand_cfg = (typeof(hand_cfg)) userdata;
+
 	int hand_type = hand_cfg ? hand_cfg->type : 0;
+	uint8_t hand_color = PALETTE_HAND_SECOND;
+	uint8_t hand_halo = PALETTE_HALO;
 
-	/* Core structural layout parameter placeholders */
-	float back_pivot_length = 7.0f;
-	float base_width = 3.0f;
-	float mid_factor = 0.45f;
-	float shape_taper = 0.85f;
-	float tip_length = 41.0f;
-	float length_multiplier = 1.000f;
-	Uint8 palette_hand_idx = PALETTE_HAND_SECOND;
-
-	/* Sheet grid structure bounding alignments */
-	int col_idx = frame_idx % 10;
-	int row_idx = frame_idx / 10;
-	int final_offset_x = col_idx * cell_w;
-	int final_offset_y = row_idx * cell_h;
-
-	/* Legacy face template configuration baselines */
-	float aspect_x = 0.711f;
-	float aspect_y = 0.97f;
-	float scale = (float) ctx.current_half_steps / 2.0f;
-	float local_pivot_x = 31.0f * scale;
-	float local_pivot_y = 45.0f * scale;
-
-	/* Dynamic timeline calculation tracking variables */
-	float vertical_factor = 0.0f;
-	float dynamic_seconds_base = 0.0f;
-
-	/* Trigonometric circular vector elements */
-	float angle_rad = 0.0f;
-	float cos_a = 0.0f;
-	float sin_a = 0.0f;
-
-	/* Isotropic circular tracking profiles */
-	float back_x = 0.0f, back_y = 0.0f;
-	float forward_x = 0.0f, forward_y = 0.0f;
-
-	/* Un-skewed continuous layout spine markers */
-	float raw_back_x = 0.0f, raw_back_y = 0.0f;
-	float raw_tip_x = 0.0f, raw_tip_y = 0.0f;
-	float raw_mid_x = 0.0f, raw_mid_y = 0.0f;
-
-	/* Continuous normal offset components */
-	float perp_x = 0.0f, perp_y = 0.0f;
-	float tri_half_w = 0.0f;
-
-	/* Final integer pixel steps used for symmetrical wing extrusion */
-	int step_l_x = 0, step_l_y = 0;
-	int step_m_l_x = 0, step_m_l_y = 0;
-
-	/* Final integer vertices indices mapped directly to the texture canvas grid */
-	int x_tri_tip = 0, y_tri_tip = 0;
-	int x_tri_l = 0, y_tri_l = 0;
-	int x_tri_r = 0, y_tri_r = 0;
-	int x_mid_l = 0, y_mid_l = 0;
-	int x_mid_r = 0, y_mid_r = 0;
-
-	/* Suppress mandatory callback signature parameters forced by the runtime framework */
-	(void) cell_x;
-	(void) cell_y;
-	(void) sheet_h;
-
-	/* =========================================================================
-	 * STAGE 1: ANAMORPHIC ELLIPTICAL TIMELINE STATE EVALUATION
-	 * =========================================================================
-	 * Evaluates cyclical frame phases to interpolate non-uniform face heights.
-	 * Compensates for the asymmetrical 31,45 face anchor, scaling the baseline
-	 * seamlessly between 39px (North) and 43px (South) throughout the cycle.
-	 * The output serves as the master length reference for the active frame pass.
-	 */
-	vertical_factor = -cosf(((float) phase / (float) TOTAL_HAND_PHASES) * 2.0f * (float) M_PI);
-	dynamic_seconds_base = 41.0f + (vertical_factor * 2.0f);
-
-	/* =========================================================================
-	 * STAGE 2: CONFIGURATION MATRIX DESIGN SEGREGATION
-	 * =========================================================================
-	 * Maps specific structural configurations dynamically onto our state registers.
-	 * Enforces the 7:5:3 structural width and length proportions relative to the
-	 * dynamic baseline. This isolates each hand class without breaking shared formulas.
-	 */
 	if (hand_type == HAND_TYPE_HOUR) {
-		back_pivot_length = 3.0f;
-		length_multiplier = 28.0f / 41.0f; /* Fixed ratio multiplier relative to the second hand */
-		base_width = 7.0f; /* Hard-coded structural thickness */
-		mid_factor = 0.22f; /* Shoulder torso placement factor close to base */
-		shape_taper = 0.90f; /* Slight width narrowing factor at torso */
-		palette_hand_idx = PALETTE_HAND_HOUR;
+		hand_color = PALETTE_HAND_HOUR;
 	} else if (hand_type == HAND_TYPE_MINUTE) {
-		back_pivot_length = 5.0f;
-		length_multiplier = 36.0f / 41.0f; /* Fixed ratio multiplier relative to the second hand */
-		base_width = 5.0f; /* Hard-coded structural thickness */
-		mid_factor = 0.33f; /* Mid-range shoulder placement */
-		shape_taper = 0.85f; /* Standard width tapering factor */
-		palette_hand_idx = PALETTE_HAND_MINUTE;
-	} else {
-		back_pivot_length = 7.0f;
-		length_multiplier = 1.000f; /* Second hand matches 100% of the reference scale */
-		base_width = 3.0f; /* High-efficiency thin second needle */
-		mid_factor = 0.45f; /* Long, slender torso reaching near center span */
-		shape_taper = 0.85f;
-		palette_hand_idx = PALETTE_HAND_SECOND;
+		hand_color = PALETTE_HAND_MINUTE;
 	}
 
-	/* Guard scale factor protections against degenerate tiny setups */
-	if (scale < 1.0f) {
-		scale = 1.0f;
+	// Interchangeable calling interface pattern
+	if (TEST_MODE == 0) {
+		DrawProductionFrame(buffer, sheet_w, sheet_h, frame_idx, scale, px_f, py_f, px, py,
+							hand_color, hand_halo);
+	} else if (frame_idx == 0 && hand_type == HAND_TYPE_SECOND) {
+		DrawTestFrame(buffer, sheet_w, sheet_h, frame_idx, scale, px_f, py_f, px, py, hand_color,
+					  hand_halo);
+	}
+}
+
+// ============================================================================
+// PRODUCTION SHADER PIPELINE EXECUTION
+// ============================================================================
+static void DrawProductionFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx,
+								float scale, float px_f, float py_f, int px, int py,
+								uint8_t hand_color, uint8_t hand_halo) {
+	(void) px;
+	(void) py;
+	(void) hand_halo; // Voiding metrics not utilized by the raster line compiler path
+
+	int target_piv_x, target_piv_y, target_end_x, target_end_y;
+	int phase = frame_idx % TOTAL_HAND_PHASES;
+
+	CatClock_CalculateHandEndpointsRaster(phase, px_f, py_f, scale, &target_piv_x, &target_piv_y,
+										  &target_end_x, &target_end_y);
+
+	int int_scale_factor = (int) floorf(scale);
+	if (int_scale_factor < 1) {
+		int_scale_factor = 1;
 	}
 
-	/* =========================================================================
-	 * STAGE 3: CONTINUOUS ISOTROPIC SPACE VECTOR COMPOSITION
-	 * =========================================================================
-	 * Computes directional trajectories and perpendicular cross-vectors in a
-	 * uniform, isotropic circular frame before non-uniform aspect metrics are applied.
-	 * This isolates our trigonometry from horizontal compression distorting our normals.
+	DrawLineLikeMesa(buffer, sheet_w, sheet_h, (float) target_piv_x, (float) target_piv_y,
+					 (float) target_end_x, (float) target_end_y, (float) int_scale_factor,
+					 hand_color);
+}
+
+// ============================================================================
+// MODULAR REFACTOR TEST BENCH FRAMEWORK
+// ============================================================================
+static void DrawTestFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx, float scale,
+						  float px_f, float py_f, int px, int py, uint8_t hand_color,
+						  uint8_t hand_halo) {
+	// Structural logging headers for cross-thread parsers
+	printf("[DIAG-FRAME-START] FrameIdx: %d | Scale: %.4f\n", frame_idx, scale);
+	printf("[DIAG-FRAME-PIVOT] Float: (%.4f, %.4f) | Rounded: (%d, %d)\n", px_f, py_f, px, py);
+	printf("[DIAG-FRAME-CONFIG] Target Colors - Color: %u, Halo: %u\n", hand_color, hand_halo);
+
+#if (TEST_MODE == 1)
+	// ====================================================================
+	// CENTERED TRIANGLE TEST
+	// ====================================================================
+	/*
+	 * Continuous bounds under 2x layout context:
+	 * v0: (42.0, 70.0) | v1: (82.0, 70.0) | v2: (42.0, 110.0)
+	 *
+	 * Continuous lengths of the orthogonal components:
+	 * \Delta X = 82.0 - 42.0 = 40.0 continuous pixels
+	 * \Delta Y = 110.0 - 70.0 = 40.0 continuous pixels
+	 *
+	 * Mesa/OpenGL Rule Mapping Constraints:
+	 * 1. The Shared Edge Orientation: The diagonal hypotenuse steps from
+	 *    top-right (82.0, 70.0) down to bottom-left (42.0, 110.0).
+	 * 2. Left-Edge Inclusions: Shared boundary segments classified as
+	 *    left-edges or horizontal top-edges belong inclusively to that primitive.
+	 * 3. The Ownership Mapping: For Primitive 1 (upper-left), this diagonal
+	 *    forms its bounding right/bottom-right edge constraint. For Primitive 2
+	 *    (lower-right), it forms its left/bottom-left constraint boundary.
+	 *
+	 * Because left-edges are inclusive under Mesa rules, Primitive 2 (lower-right)
+	 * captures the shared diagonal boundary pixels entirely. This forces the
+	 * lower primitive to fill completely to a full 40 pixels wide along the Y=109 row,
+	 * while Primitive 1 steps back exclusively, finishing at exactly 39 pixels wide.
 	 */
-	angle_rad
-		= ((float) phase / (float) TOTAL_HAND_PHASES) * 2.0f * (float) M_PI - ((float) M_PI / 2.0f);
-	cos_a = cosf(angle_rad);
-	sin_a = sinf(angle_rad);
+	float half_size_f = 10.0f * scale;
+	// Shift the baseline pivot to a pixel center space
+	float center_x = floorf(px_f) + 0.5f;
+	float center_y = floorf(py_f) + 0.5f;
 
-	/* Apply the fractional length multiplier to isolate dynamic forward lengths */
-	tip_length = dynamic_seconds_base * length_multiplier;
+	float x_min_f = center_x - half_size_f;
+	float x_max_f = center_x + half_size_f;
+	float y_min_f = center_y - half_size_f;
+	float y_max_f = center_y + half_size_f;
 
-	/* Factor active global scaling parameters cleanly into un-rounded dimensions */
-	back_pivot_length *= scale;
-	tip_length *= scale;
-	tri_half_w = (base_width / 2.0f) * scale;
+	printf("[TEST-1-INPUT] Centered Triangle Primitive Configuration:\n");
+	printf("  Tri1 vertices -> v0:(%.4f, %.4f) v1:(%.4f, %.4f) v2:(%.4f, %.4f)\n", x_min_f, y_min_f,
+		   x_max_f, y_min_f, x_min_f, y_max_f);
+	printf("  Tri2 vertices -> v0:(%.4f, %.4f) v1:(%.4f, %.4f) v2:(%.4f, %.4f)\n", x_max_f, y_min_f,
+		   x_max_f, y_max_f, x_min_f, y_max_f);
 
-	/* Extrude orientation directional poles symmetrically from the face origin */
-	forward_x = cos_a * tip_length;
-	forward_y = sin_a * tip_length;
+	// Convert old continuous bounds to pure fixed-viewport NDC coordinate values:
+	float v0x_ndc = (x_min_f / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (y_min_f / ((float) sheet_h / 2.0f));
 
-	back_x = -cos_a * back_pivot_length;
-	back_y = -sin_a * back_pivot_length;
+	float v1x_ndc = (x_max_f / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (y_min_f / ((float) sheet_h / 2.0f));
 
-	/* Calculate a mathematically precise normal vector in un-skewed isotropic space */
-	perp_x = -sin_a;
-	perp_y = cos_a;
+	float v2x_ndc = (x_min_f / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - (y_max_f / ((float) sheet_h / 2.0f));
 
-	/* =========================================================================
-	 * STAGE 4: CENTERLINE GRID POSITION LOCKING
-	 * =========================================================================
-	 * Core spine coordinates are locked to integer values first to guarantee a shared baseline */
-	raw_back_x = local_pivot_x + (back_x * aspect_x);
-	raw_back_y = local_pivot_y + (back_y * aspect_y);
+	float v3x_ndc = (x_max_f / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v3y_ndc = 1.0f - (y_max_f / ((float) sheet_h / 2.0f));
 
-	raw_tip_x = local_pivot_x + (forward_x * aspect_x);
-	raw_tip_y = local_pivot_y + (forward_y * aspect_y);
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v1x_ndc, v1y_ndc, v3x_ndc, v3y_ndc, v2x_ndc,
+						 v2y_ndc, hand_halo);
 
-	/* Linearly interpolate the torso shoulder node in continuous float space */
-	raw_mid_x = raw_back_x + (raw_tip_x - raw_back_x) * mid_factor;
-	raw_mid_y = raw_back_y + (raw_tip_y - raw_back_y) * mid_factor;
+#elif (TEST_MODE == 2)
+	float size = 20.0f * scale;
+	float x1 = px_f + size;
+	float x2 = px_f;
+	float x3 = px_f + size;
+	float y3 = py_f + size;
 
-	/* Ground layout center anchors to the exact integer pixel tracks */
-	int cx0 = (int) floorf(raw_back_x + 0.5f) + final_offset_x;
-	int cy0 = (int) floorf(raw_back_y + 0.5f) + final_offset_y;
+	printf("[TEST-2-INPUT] Pivot-Anchored Triangle Configuration:\n");
+	printf("  Tri1 vertices -> v0:(%.4f, %.4f) v1:(%.4f, %.4f) v2:(%.4f, %.4f)\n", px_f, py_f, x1,
+		   py_f, x2, py_f + size);
+	printf("  Tri2 vertices -> v0:(%.4f, %.4f) v1:(%.4f, %.4f) v2:(%.4f, %.4f)\n", x1, py_f, x3, y3,
+		   x2, py_f + size);
 
-	int cx1 = (int) floorf(raw_tip_x + 0.5f) + final_offset_x;
-	int cy1 = (int) floorf(raw_tip_y + 0.5f) + final_offset_y;
+	// Convert positions to Normalized Device Coordinates (NDC) bounds
+	float v0x_ndc = (px_f / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (py_f / ((float) sheet_h / 2.0f));
 
-	int cx_mid = (int) floorf(raw_mid_x + 0.5f) + final_offset_x;
-	int cy_mid = (int) floorf(raw_mid_y + 0.5f) + final_offset_y;
+	float v1x_ndc = (x1 / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (py_f / ((float) sheet_h / 2.0f));
 
-	/* =========================================================================
-	 * STAGE 5: MAGNITUDE-BASED MIRRORED WIDTH EXTRUSION
-	 * =========================================================================
-	 * Resolves cardinal line collapsing and asymmetric pixel inflation.
-	 * Width steps are rounded as absolute positive values before directional signs
-	 * are applied, forcing left and right spans to match perfectly on the grid.
-	 * Sub-pixel threshold filters force minimal 1-pixel heights to block clipping.
-	 */
-	float fx_l = perp_x * tri_half_w * aspect_x;
-	float fy_l = perp_y * tri_half_w * aspect_y;
+	float v2x_ndc = (x2 / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - ((py_f + size) / ((float) sheet_h / 2.0f));
 
-	int idx_w_x = (int) floorf(fabsf(fx_l) + 0.5f);
-	int idx_w_y = (int) floorf(fabsf(fy_l) + 0.5f);
+	float v3x_ndc = (x3 / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v3y_ndc = 1.0f - (y3 / ((float) sheet_h / 2.0f));
 
-	/* Sub-pixel clipping prevention filter blocks zero-width flattening */
-	if (idx_w_x == 0 && fabsf(fx_l) > 0.05f)
-		idx_w_x = 1;
-	if (idx_w_y == 0 && fabsf(fy_l) > 0.05f)
-		idx_w_y = 1;
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v1x_ndc, v1y_ndc, v3x_ndc, v3y_ndc, v2x_ndc,
+						 v2y_ndc, hand_halo);
 
-	/* Re-apply layout signs to establish the true directional integer offset steps */
-	step_l_x = (fx_l >= 0.0f) ? idx_w_x : -idx_w_x;
-	step_l_y = (fy_l >= 0.0f) ? idx_w_y : -idx_w_y;
+#elif (TEST_MODE == 3)
+	// ====================================================================
+	// CENTERED DIAMOND RASTER TEST
+	// ====================================================================
+	int radius = 15 * (int) roundf(scale);
+	float px_float = (float) px;
+	float py_float = (float) py;
+	float r_float = (float) radius;
 
-	/* Apply the identical magnitude-mirroring pass to the torso shoulders */
-	float fx_m = perp_x * tri_half_w * shape_taper * aspect_x;
-	float fy_m = perp_y * tri_half_w * shape_taper * aspect_y;
+	printf("[TEST-3-INPUT] Centered Diamond Configuration (Integer Anchored):\n");
+	printf("  Anchor Pixel PX: %d, PY: %d | Computed Radius: %d\n", px, py, radius);
 
-	int idx_m_x = (int) floorf(fabsf(fx_m) + 0.5f);
-	int idx_m_y = (int) floorf(fabsf(fy_m) + 0.5f);
+	// Map vertex positions into standard NDC target coordinates
+	float top_x_ndc = (px_float / ((float) sheet_w / 2.0f)) - 1.0f;
+	float top_y_ndc = 1.0f - ((py_float - r_float) / ((float) sheet_h / 2.0f));
 
-	if (idx_m_x == 0 && fabsf(fx_m) > 0.05f)
-		idx_m_x = 1;
-	if (idx_m_y == 0 && fabsf(fy_m) > 0.05f)
-		idx_m_y = 1;
+	float right_x_ndc = ((px_float + r_float) / ((float) sheet_w / 2.0f)) - 1.0f;
+	float right_y_ndc = 1.0f - (py_float / ((float) sheet_h / 2.0f));
 
-	step_m_l_x = (fx_m >= 0.0f) ? idx_m_x : -idx_m_x;
-	step_m_l_y = (fy_m >= 0.0f) ? idx_m_y : -idx_m_y;
+	float bottom_x_ndc = (px_float / ((float) sheet_w / 2.0f)) - 1.0f;
+	float bottom_y_ndc = 1.0f - ((py_float + r_float) / ((float) sheet_h / 2.0f));
 
-	/* =========================================================================
-	 * STAGE 6: GEOMETRY LAYER ASSEMBLING & SOFTWARE RASTERIZATION
-	 * =========================================================================
-	 * Extrudes vertices by combining our integer steps with the locked spine anchors.
-	 * Deploys a multi-pass mesh hull that layers a reinforcing shoulder quad on top of
-	 * a sharp, full-length diamond hull. This maintains a sleek taper while adding
-	 * structural reinforcement near thin horizontal cardinal boundaries.
-	 */
-	x_tri_tip = cx1;
-	y_tri_tip = cy1;
+	float left_x_ndc = ((px_float - r_float) / ((float) sheet_w / 2.0f)) - 1.0f;
+	float left_y_ndc = 1.0f - (py_float / ((float) sheet_h / 2.0f));
 
-	/* Build the base wings symmetrically by adding and subtracting our mirrored steps */
-	x_tri_l = cx0 + step_l_x;
-	y_tri_l = cy0 + step_l_y;
-	x_tri_r = cx0 - step_l_x;
-	y_tri_r = cy0 - step_l_y;
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, top_x_ndc, top_y_ndc, right_x_ndc, right_y_ndc,
+						 bottom_x_ndc, bottom_y_ndc, hand_color);
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, top_x_ndc, top_y_ndc, bottom_x_ndc, bottom_y_ndc,
+						 left_x_ndc, left_y_ndc, hand_halo);
 
-	/* Build the shoulder wings symmetrically using identical structural spacing rules */
-	x_mid_l = cx_mid + step_m_l_x;
-	y_mid_l = cy_mid + step_m_l_y;
-	x_mid_r = cx_mid - step_m_l_x;
-	y_mid_r = cy_mid - step_m_l_y;
+#elif (TEST_MODE == 4)
+	// ====================================================================
+	// EXPLICIT CCW DIAMOND RASTER TEST
+	// ====================================================================
+	int radius = 15 * (int) roundf(scale);
+	float px_float = (float) px;
+	float py_float = (float) py;
+	float r_float = (float) radius;
 
-	/* Pass A: Rasterize the full-length baseline triangle shape */
-	FillSoftwareTriangle(buffer, x_tri_l, y_tri_l, x_tri_r, y_tri_r, x_tri_tip, y_tri_tip, atlas_w,
-						 ctx.hours_atlas.atlas_h, palette_hand_idx);
+	printf("[TEST-4-INPUT] Explicit CCW Diamond Configuration:\n");
 
-	/* Pass B: Layer the first half of the reinforcing shoulder torso quad on top */
-	FillSoftwareTriangle(buffer, x_tri_l, y_tri_l, x_tri_r, y_tri_r, x_mid_l, y_mid_l, atlas_w,
-						 ctx.hours_atlas.atlas_h, palette_hand_idx);
+	float top_x_ndc = (px_float / ((float) sheet_w / 2.0f)) - 1.0f;
+	float top_y_ndc = 1.0f - ((py_float - r_float) / ((float) sheet_h / 2.0f));
 
-	/* Pass C: Layer the second half of the reinforcing shoulder torso quad on top */
-	FillSoftwareTriangle(buffer, x_tri_r, y_tri_r, x_mid_l, y_mid_l, x_mid_r, y_mid_r, atlas_w,
-						 ctx.hours_atlas.atlas_h, palette_hand_idx);
+	float right_x_ndc = ((px_float + r_float) / ((float) sheet_w / 2.0f)) - 1.0f;
+	float right_y_ndc = 1.0f - (py_float / ((float) sheet_h / 2.0f));
+
+	float bottom_x_ndc = (px_float / ((float) sheet_w / 2.0f)) - 1.0f;
+	float bottom_y_ndc = 1.0f - ((py_float + r_float) / ((float) sheet_h / 2.0f));
+
+	float left_x_ndc = ((px_float - r_float) / ((float) sheet_w / 2.0f)) - 1.0f;
+	float left_y_ndc = 1.0f - (py_float / ((float) sheet_h / 2.0f));
+
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, top_x_ndc, top_y_ndc, left_x_ndc, left_y_ndc,
+						 bottom_x_ndc, bottom_y_ndc, hand_color);
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, top_x_ndc, top_y_ndc, bottom_x_ndc, bottom_y_ndc,
+						 right_x_ndc, right_y_ndc, hand_halo);
+
+#elif (TEST_MODE == 5)
+	// ====================================================================
+	// CROSS TEST (LINE TEST)
+	// ====================================================================
+	int size = 20 * (int) roundf(scale);
+	int int_scale_factor = (int) floorf(scale);
+	if (int_scale_factor < 1) {
+		int_scale_factor = 1;
+	}
+
+	printf("[TEST-5-INPUT] Crosshair Line Vector Configuration:\n");
+	printf("  Horiz Line -> x0:%.4f y0:%.4f | x1:%.4f y1:%.4f | Width: %d\n", (float) (px - size),
+		   (float) py, (float) (px + size), (float) py, int_scale_factor);
+	printf("  Vert Line  -> x0:%.4f y0:%.4f | x1:%.4f y1:%.4f | Width: %d\n", (float) px,
+		   (float) (py - size), (float) px, (float) (py + size), int_scale_factor);
+
+	DrawLineLikeMesa(buffer, sheet_w, sheet_h, (float) (px - size), (float) py, (float) (px + size),
+					 (float) py, (float) int_scale_factor, hand_color);
+	DrawLineLikeMesa(buffer, sheet_w, sheet_h, (float) px, (float) (py - size), (float) px,
+					 (float) (py + size), (float) int_scale_factor, hand_color);
+
+#elif (TEST_MODE == 6)
+	// ====================================================================
+	// ISOLATION TEST A: PURE COUNTER-CLOCKWISE (CCW) VERTEX ORDER
+	// ====================================================================
+	float offset = 15.0f * scale;
+	float v0_x = (float) px, v0_y = (float) py;
+	float v1_x = (float) px, v1_y = (float) py + offset;
+	float v2_x = (float) px + offset, v2_y = (float) py + offset;
+
+	printf("[TEST-6-INPUT] CCW Verification Triangle:\n");
+
+	float v0x_ndc = (v0_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (v0_y / ((float) sheet_h / 2.0f));
+
+	float v1x_ndc = (v1_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (v1_y / ((float) sheet_h / 2.0f));
+
+	float v2x_ndc = (v2_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - (v2_y / ((float) sheet_h / 2.0f));
+
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+
+#elif (TEST_MODE == 7)
+	// ====================================================================
+	// ISOLATION TEST B: PURE CLOCKWISE (CW) VERTEX ORDER
+	// ====================================================================
+	float offset = 15.0f * scale;
+	float v0_x = (float) px, v0_y = (float) py;
+	float v1_x = (float) px + offset, v1_y = (float) py + offset;
+	float v2_x = (float) px, v2_y = (float) py + offset;
+
+	printf("[TEST-7-INPUT] CW (Sorting Pipeline Target) Triangle:\n");
+
+	float v0x_ndc = (v0_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (v0_y / ((float) sheet_h / 2.0f));
+
+	float v1x_ndc = (v1_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (v1_y / ((float) sheet_h / 2.0f));
+
+	float v2x_ndc = (v2_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - (v2_y / ((float) sheet_h / 2.0f));
+
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+
+#elif (TEST_MODE == 8)
+	// ====================================================================
+	// ISOLATION TEST C: SUBPIXEL SNAP AT EXACT EXPLICIT INTEGER BOUNDS
+	// ====================================================================
+	float offset = 10.0f * scale;
+	float v0_x = (float) px, v0_y = (float) py;
+	float v1_x = (float) px + offset, v1_y = (float) py;
+	float v2_x = (float) px, v2_y = (float) py + offset;
+
+	printf("[TEST-8-INPUT] Integer Boundaries Grid Snap Alignment:\n");
+
+	float v0x_ndc = (v0_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (v0_y / ((float) sheet_h / 2.0f));
+
+	float v1x_ndc = (v1_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (v0_y / ((float) sheet_h / 2.0f));
+
+	float v2x_ndc = (v0_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - (v2_y / ((float) sheet_h / 2.0f));
+
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+
+#elif (TEST_MODE == 9)
+	// ====================================================================
+	// ISOLATION TEST D: FRACTIONAL BIAS OFFSET TEST (+0.5 PIXEL SHIFT)
+	// ====================================================================
+	float offset = 10.0f * scale;
+	float v0_x = (float) px + 0.5f, v0_y = (float) py + 0.5f;
+	float v1_x = (float) px + offset + 0.5f, v1_y = (float) py + 0.5f;
+	float v2_x = (float) px + 0.5f, v2_y = (float) py + offset + 0.5f;
+
+	printf("[TEST-9-INPUT] Fractional +0.5 Subpixel Shift Bias Alignment:\n");
+
+	float v0x_ndc = (v0_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v0y_ndc = 1.0f - (v0_y / ((float) sheet_h / 2.0f));
+
+	float v1x_ndc = (v1_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v1y_ndc = 1.0f - (v1_y / ((float) sheet_h / 2.0f));
+
+	float v2x_ndc = (v2_x / ((float) sheet_w / 2.0f)) - 1.0f;
+	float v2y_ndc = 1.0f - (v2_y / ((float) sheet_h / 2.0f));
+
+	DrawTriangleLikeMesa(buffer, sheet_w, sheet_h, v0x_ndc, v0y_ndc, v1x_ndc, v1y_ndc, v2x_ndc,
+						 v2y_ndc, hand_color);
+
+#endif
+// Place this in catclock_hands.c inside the (scale == 2.0000f) block
+#if (TEST_MODE != 0)
+	if (scale == 2.0000f) {
+		int atlas_w = sheet_w;
+		printf("\n[BUFFER-AUDIT] FINAL COMBINED FRAMEBUFFER (X[30..105], Y[55..130]):\n");
+
+		// --- 1. HUNDREDS DIGIT LINE ---
+		printf("         ");
+		for (int test_x = 30; test_x <= 105; test_x++) {
+			printf("%d", test_x / 100);
+		}
+		printf("\n");
+
+		// --- 2. TENS DIGIT LINE ---
+		printf("         ");
+		for (int test_x = 30; test_x <= 105; test_x++) {
+			printf("%d", (test_x / 10) % 10);
+		}
+		printf("\n");
+
+		// --- 3. ONES DIGIT LINE ---
+		printf("         ");
+		for (int test_x = 30; test_x <= 105; test_x++) {
+			printf("%d", test_x % 10);
+		}
+		printf("\n");
+
+		// --- 4. PRINT BODY ROWS ---
+		for (int test_y = 55; test_y <= 130; test_y++) {
+			printf("Row %03d: ", test_y);
+			for (int test_x = 30; test_x <= 105; test_x++) {
+				uint32_t target_offset = test_y * atlas_w + test_x;
+				uint8_t pixel_val = buffer[target_offset];
+
+				if (pixel_val == hand_color) {
+					printf("1");
+				} else if (pixel_val == hand_halo) {
+					printf("H");
+				} else if (pixel_val != 0) {
+					printf("X");
+				} else {
+					printf(".");
+				}
+			}
+			printf("\n");
+		}
+		printf("[BUFFER-AUDIT] Final Frame Pass Complete\n\n");
+	}
+	printf("[DIAG-FRAME-STOP] FrameIdx: %d Execution Matrix End\n\n", frame_idx);
+#endif
 }

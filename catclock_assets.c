@@ -139,11 +139,12 @@ void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* ra
 			r = 255;
 			g = 255;
 			b = 255;
-		} else if (token == PALETTE_NECKTIE || token == PALETTE_HAND_SECOND) {
+		} else if (token == PALETTE_NECKTIE || token == PALETTE_HAND_SECOND
+				   || token == PALETTE_HAND_HOUR) {
 			r = 255;
 			g = 0;
 			b = 0;
-		} else if (token == PALETTE_CAT_BODY || token == PALETTE_HAND_HOUR
+		} else if (token == PALETTE_CAT_BODY //|| token == PALETTE_HAND_HOUR
 				   || token == PALETTE_HAND_MINUTE) {
 			r = 0;
 			g = 0;
