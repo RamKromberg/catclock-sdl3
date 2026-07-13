@@ -40,7 +40,7 @@ int target_fps_limit = DEFAULT_FPS;
 /* ==========================================================================
    OS WINDOW LEVEL EVENT CAPTURE & INTERACTION HOOKS
    ========================================================================== */
-
+#ifndef TEST_MODE
 /**
  * WidgetWindowHitTest
  * Captures custom desktop mouse interactions. Uses the unscaled 1-bit XBM
@@ -75,6 +75,7 @@ static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window* win, const SDL_
 
 	return is_solid ? SDL_HITTEST_DRAGGABLE : SDL_HITTEST_NORMAL;
 }
+#endif
 
 /* ==========================================================================
    APPLICATION ENTRY RUNTIME LAYER
@@ -147,12 +148,12 @@ int main(int argc, char* argv[]) {
 	/* RE-ALIGNED: References the modernized canvas constants from shared header pass */
 	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
 	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 284.0f;
-	float scale = (float) ctx.current_half_steps / 2.0f;
 
+#ifndef TEST_MODE
+	float scale = (float) ctx.current_half_steps / 2.0f;
 	int target_w = (int) (baseline_w * scale);
 	int target_h = (int) (baseline_h * scale);
 
-#ifndef TEST_MODE
 	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL;
 
 	if (!ctx.use_decorations) {

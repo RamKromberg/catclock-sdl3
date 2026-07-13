@@ -1,3 +1,4 @@
 # === FILE: .clang-format-ignore ===
 shaders/
 catclock_shaders.h
+portablegl/

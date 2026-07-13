@@ -2,7 +2,7 @@
 set -e
 
 output_pdf="catclock_repository_dump.pdf"
-file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl Makefile dump_validation.sh shell.nix"
+file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl"
 file_nontargets="catclock_shaders.h"
 
 tmp_payload=$(mktemp)
@@ -135,7 +135,7 @@ Read and parse the contents of the attached catclock_repository_dump.pdf.
    2. Verify Manifest: Ensure all source files mentioned in the document are fully accounted for.
 
 ## Output Requirement:
-   1. List the confirmed file manifest inventory (e.g., catclock_main.c, Makefile, shell.nix, etc.).
+   1. List the confirmed file manifest inventory.
    2. End the response immediately after the list.
    3. Do not refer to PDF structural elements such as pagination or indexes in your replies. Only refer to code by source filenames and adjunct lines.
 

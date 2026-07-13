@@ -1,5 +1,5 @@
 static const HandMasterOffset HAND_MASTER_OFFSETS[TOTAL_HAND_PHASES] = {
-    {   0, -39 }, // Phase 0
+    {   0, -40 }, // Phase 0
     {   3, -39 }, // Phase 1
     {   6, -38 }, // Phase 2
     {   9, -38 }, // Phase 3
@@ -44,7 +44,7 @@ static const HandMasterOffset HAND_MASTER_OFFSETS[TOTAL_HAND_PHASES] = {
     { -29,  13 }, // Phase 42
     { -29,   9 }, // Phase 43
     { -29,   4 }, // Phase 44
-    { -29,   0 }, // Phase 45
+    { -30,   0 }, // Phase 45
     { -29,  -4 }, // Phase 46
     { -29,  -9 }, // Phase 47
     { -29, -13 }, // Phase 48

@@ -180,12 +180,6 @@ void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* lib);
 
 /* Core primitive rasterization engine shared helpers */
 void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uint8_t token);
-void DrawTriangleLikeMesa(uint8_t* buffer, int atlas_w, int atlas_h,
-						  float x0, float y0, float x1, float y1, float x2, float y2,
-						  uint8_t color);
-void DrawLineLikeMesa(uint8_t* buffer, int atlas_w, int atlas_h,
-					  float x0, float y0, float x1, float y1,
-					  float thickness, uint8_t color);
 void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
 						int width, int height, uint8_t token);
 

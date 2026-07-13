@@ -32,12 +32,23 @@ let
       chmod +x $out/bin/sokol-shdc
     '';
   };
+
+  portablegl = pkgs.fetchFromGitHub {
+    owner = "rswinkle";
+    repo = "portablegl";
+    rev = "0.100.0"; 
+    sha256 = "sha256-OOqQFIXHiGfNK/CwK7qkGY6NRyhUbQ8hw5aVuLksXdM==";
+  };
+
   my-python-env = pkgs.python3.withPackages (ps: with ps; [
+    opencv4
     numpy
-  ]); #approximate the clockface lame curve and bake it to the c source instead of wasting cycles on it during live rendering
+  ]); # precompute_clockface: approximate the clockface lame curve and bake it into the c source instead of wasting cycles on it during pre-bake/live rendering
 in
 
 pkgs.mkShell {
+  name = "catclock-sdl3-dev-env";
+
   nativeBuildInputs = with pkgs; [
     pkg-config
     gcc
@@ -49,6 +60,7 @@ pkgs.mkShell {
     osslsigncode openssl # ./gen_cert.sh
     qpdf # ./pack_source.sh
     groff groff.perl # ./cmd2pdf.sh dump.pdf 'grep -A 40 "typedef struct sg_image_desc" sokol/sokol_gfx.h' 'grep -A 25 "sg_pixel_format" sokol/sokol_gfx.h'
+    pdftk
     # --- GPU MONITORING PACKAGES ---
     # for Intel xe graphics driver, the track.sh script does the job well enough.
     #nvtopPackages.intel
@@ -60,10 +72,9 @@ pkgs.mkShell {
     sdl3
     sokolCompiler
     glsl_analyzer # formatter. use `#pragma sokol` to prefix sokol tags ( https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md )
-    libGL.dev
+    libGL.dev libGL libGLU
     libx11.dev
     wayland.dev
-    mesa # for the reference rasterizers
   ];
 
   buildInputs = [
@@ -81,14 +92,25 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:40:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:40:00" xclock
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
+    
+    export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
+      pkgs.libGL
+      pkgs.glib
+      pkgs.libx11
+    ]}:$LD_LIBRARY_PATH"
 
     if [ ! -d "./sokol" ]; then
       ln -sfn "${sokolSrc}" ./sokol
     fi
 
+    if [ ! -d "./portablegl" ]; then
+      ln -sfn ${portablegl} ./portablegl
+    fi
+
     if [ -d .git ]; then
         git config core.pager "less -x4"
     fi
+
     export NIX_CFLAGS_COMPILE="-I${pkgs.libGL.dev}/include -I${pkgs.libx11.dev}/include $NIX_CFLAGS_COMPILE"
 
     export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
@@ -97,9 +119,6 @@ pkgs.mkShell {
 
     # Capture the runtime package path where the real Windows DLL lives
     export WINDOWS_SDL_BIN="${windowsPkgs.sdl3.bin or windowsPkgs.sdl3}"
-    
-    export DEVSHELL_MESA_SRC="${pkgs.mesa.src}"
-    export DEVSHELL_MESA="${pkgs.mesa}"
 
     echo "=================================================="
     echo " Kit-Cat Clock Cross-Platform Compiler Shell Active "

@@ -15,26 +15,31 @@ fi
 # Set to 1 to draw a solid, unbroken Base-14 Em-Dash separator rule between blocks.
 # Set to 0 to disable it and keep only raw whitespace newlines.
 DRAW_DIVIDER=1
+USE_COLOR=0 # Gemini gets confused about colors
 
 # ==============================================================================
 # RESTORED ORIGINAL ENVIRONMENT COLOR INJECTIONS & PAGER DISABLES
 # ==============================================================================
-GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01;34:quote=01;37'; export GCC_COLORS
-CLANG_COLORS='error=red:warning=magenta:note=cyan:caret=green:locus=blue'; export CLANG_COLORS
-FORCE_COLOR=1; export FORCE_COLOR
-MYPY_FORCE_COLOR=1; export MYPY_FORCE_COLOR
-PY_FORCE_COLOR=1; export PY_FORCE_COLOR
-HARNESS_COLOR=1; export HARNESS_COLOR
-
 # Core System Layout Overrides: Tells programs to force colors but bypass pagers
-GIT_CONFIG_PARAMETERS="'color.ui=always' 'core.pager=cat' 'pager.grep=false'"; export GIT_CONFIG_PARAMETERS
-GIT_PAGER=cat; export GIT_PAGER
-PAGER=cat; export PAGER
-MANPAGER=cat; export MANPAGER
-CLICOLOR=1; export CLICOLOR
-CLICOLOR_FORCE=1; export CLICOLOR_FORCE
-GREP_COLOR='01;31'; export GREP_COLOR
-GREP_COLORS='ms=:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36'; export GREP_COLORS
+if [ "$USE_COLOR" -eq 1 ]; then
+    GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01;34:quote=01;37'; export GCC_COLORS
+    CLANG_COLORS='error=red:warning=magenta:note=cyan:caret=green:locus=blue'; export CLANG_COLORS    
+    FORCE_COLOR=1; export FORCE_COLOR
+    MYPY_FORCE_COLOR=1; export MYPY_FORCE_COLOR
+    PY_FORCE_COLOR=1; export PY_FORCE_COLOR
+    HARNESS_COLOR=1; export HARNESS_COLOR
+    GIT_CONFIG_PARAMETERS="'color.ui=always' 'core.pager=cat' 'pager.grep=false'"; export GIT_CONFIG_PARAMETERS
+    CLICOLOR=1; export CLICOLOR
+    CLICOLOR_FORCE=1; export CLICOLOR_FORCE
+    GREP_COLOR='01;31'; export GREP_COLOR
+    GREP_COLORS='ms=:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36'; export GREP_COLORS
+    GIT_PAGER=cat; export GIT_PAGER
+    PAGER=cat; export PAGER
+    MANPAGER=cat; export MANPAGER
+else
+    GIT_CONFIG_PARAMETERS="'color.ui=never'"; export GIT_CONFIG_PARAMETERS 
+fi
+
 # ==============================================================================
 
 # Extract target PDF filename from the first argument
@@ -53,20 +58,38 @@ trap 'rm -f "$TMP_LOG" "$TMP_PDF"' EXIT INT TERM
 for CMD in "$@"; do
     [ -z "$CMD" ] && continue
 
+    # Inject a structured bookmark registration marker containing the literal command layout
+    printf "__REG_PDF_OUTLINE_MARKER__:%s\n" "$CMD" >> "$TMP_LOG"
+
     # Append a clean prompt marker mimicking your shell state to the log
     printf "$ %s\n" "$CMD" >> "$TMP_LOG"
     
     # ROBUST DIRECT EXECUTION PRESERVING POSIX FUNCTIONS:
-    (
-        ls()   { command ls --color=always "$@"; }
-        grep() { command grep --color=always "$@"; }
-        diff() { command diff --color=always "$@"; }
-        ip()   { command ip -color=always "$@"; }
-        dir()  { command dir --color=always "$@"; }
-        vdir() { command vdir --color=always "$@"; }
-        
-        eval "$CMD"
-    ) </dev/null >> "$TMP_LOG" 2>&1 || true
+
+    if [ "$USE_COLOR" -eq 1 ]; then
+        (
+            ls()   { command ls --color=always "$@"; }
+            grep() { command grep --color=always "$@"; }
+            diff() { command diff --color=always "$@"; }
+            ip()   { command ip -color=always "$@"; }
+            dir()  { command dir --color=always "$@"; }
+            vdir() { command vdir --color=always "$@"; }
+
+            eval "$CMD"
+        ) </dev/null >> "$TMP_LOG" 2>&1 || true
+    else
+        (
+             ls()   { command ls --color=never "$@"; }
+            grep() { command grep --color=never "$@"; }
+            diff() { command diff --color=never "$@"; }
+            ip()   { command ip -color=never "$@"; }
+            dir()  { command dir --color=never "$@"; }
+            vdir() { command vdir --color=never "$@"; }
+            
+            eval "$CMD"
+        ) </dev/null >> "$TMP_LOG" 2>&1 || true
+    fi
+    
     
     # SAFE LITERAL RECONSTRUCTION SYMBOL INJECTION TRIGGER:
     if [ "$DRAW_DIVIDER" -eq 1 ]; then
@@ -95,6 +118,15 @@ done
         active_color = "black"
     }
     {
+        # Intercept and process the custom outline marker to inject native groff hypertext bookmarks
+        if (match($0, /^__REG_PDF_OUTLINE_MARKER__:/)) {
+            title_str = substr($0, RSTART + RLENGTH)
+            # Escape double quotes inside the title string to prevent groff token errors
+            gsub(/"/, "\\(dq", title_str)
+            printf ".pdfhref O 1 -open \"%s\"\n", title_str
+            next
+        }
+
         if ($0 == "__BASE14_SOLID_DIVIDER_RULE__") {
             printf ".br\n\\D'\''l \\n[.l]u 0'\''\n.br\n"
             next

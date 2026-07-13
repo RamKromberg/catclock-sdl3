@@ -164,7 +164,6 @@ if [ -f dump_seconds_atlas.png ]; then
 else
     echo dump_seconds_atlas.png not found.
 fi
-exit # while working on hands...
 
 # ================================================================================
 # PIPELINE 2: CLOCK FACE COMPOSITION

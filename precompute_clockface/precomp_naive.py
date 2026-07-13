@@ -51,14 +51,29 @@ for phase in range(60):
     # Track the last known safe (white) pixel offset location
     last_safe_dx, last_safe_dy = 0, 0
     
+    # Anchor step origin directly to modern half-pixel centers
+    p_sub_x = pivot_x + 0.5
+    p_sub_y = pivot_y + 0.5
+    
     # Trace cleanly outward using sub-pixel increments
     for step in range(1, 1200):
         dist = step * 0.1
-        dx = int(round(dist * math.sin(unwarped_angle)))
-        dy = int(round(-dist * math.cos(unwarped_angle)))
         
-        cur_x = pivot_x + dx
-        cur_y = pivot_y + dy
+        # Calculate subpixel offsets relative to the half-pixel center
+        f_dx = dist * math.sin(unwarped_angle)
+        f_dy = -dist * math.cos(unwarped_angle)
+        
+        # Trace subpixel paths
+        cur_sub_x = p_sub_x + f_dx
+        cur_sub_y = p_sub_y + f_dy
+        
+        # Determine exact covering sampling cell boundary via math.floor
+        cur_x = int(math.floor(cur_sub_x))
+        cur_y = int(math.floor(cur_sub_y))
+        
+        # Unbiased delta conversion matching true rounding properties
+        dx = int(round(f_dx))
+        dy = int(round(f_dy))
         
         # Physical sheet limit boundary clipping
         if cur_x < 0 or cur_x >= clockface_width or cur_y < 0 or cur_y >= clockface_height:
