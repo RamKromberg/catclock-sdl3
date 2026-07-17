@@ -14,7 +14,7 @@ CFLAGS = -Wall -Wextra -O2 $(SOKOL_FLAGS) $(shell pkg-config --cflags sdl3)
 LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
 
 TARGET = catclock-sdl3
-SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_tail.c catclock_eyes.c catclock_atlas.c catclock_hands.c
+SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_atlas.c catclock_rasterizer.c catclock_tail.c catclock_eyes.c catclock_hands.c
 HEADERS = catclock_shared.h catclock_shaders.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)

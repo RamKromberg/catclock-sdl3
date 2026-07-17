@@ -17,6 +17,10 @@
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
+#ifndef TEST_MODE
+#define TEST_MODE 0
+#endif
+
 #include "sokol/sokol_gfx.h"
 #include <SDL3/SDL.h>
 #include <stdbool.h>
@@ -179,9 +183,17 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer,
 void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* lib);
 
 /* Core primitive rasterization engine shared helpers */
+int CompareFloats(const void* a, const void* b);
 void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uint8_t token);
-void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2,
-						int width, int height, uint8_t token);
+void DrawTriangleFixed(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t fx_x1, int32_t fx_y1,
+					   int32_t fx_x2, int32_t fx_y2, int width, int height, uint8_t token);
+void DrawTriangleFloat(uint8_t* buffer, float x0, float y0, float x1, float y1, float x2, float y2,
+					   int width, int height, uint8_t token);
+void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2, int width,
+						int height, uint8_t token);
+void DrawTriangleFixedSDF(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0,
+						  int32_t fx_x1, int32_t fx_y1, int32_t fx_x2, int32_t fx_y2,
+						  int width, int height, uint8_t token);
 
 /* Shader pipeline reference routines */
 void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_w, int sheet_h,

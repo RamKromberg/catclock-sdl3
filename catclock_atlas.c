@@ -22,13 +22,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-int CompareFloats(const void* a, const void* b);
-
-void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uint8_t token);
-
-void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2, int width,
-						int height, uint8_t token);
-
 void CatClock_OnWindowResize(SDL_WindowEvent* resize_event, CatClock_AppContext* context,
 							 void* renderer);
 
@@ -101,9 +94,10 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 			   userdata);
 	}
 
-	/* System Asset Automated Blueprint Dumps System */
-	/* STAGE 2: Force disk dumps to overwrite whenever texture cache state transitions */
 	if (ctx.texture_cache_stale) {
+/* System Asset Automated Blueprint Dumps System */
+/* STAGE 2: Force disk dumps to overwrite whenever texture cache state transitions */
+#ifdef DEBUG_DUMP
 		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_HAND_PHASES) {
 			struct {
 				int type;
@@ -139,6 +133,7 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 					   "disk.\n");
 			}
 		}
+#endif
 	}
 }
 
@@ -180,126 +175,4 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->atlas_w = 0;
 	atlas->atlas_h = 0;
 	atlas->scale_half_steps = 0;
-}
-
-/**
- * CompareFloats
- * Standard qsort comparison helper for floating-point bounds validation.
- */
-int CompareFloats(const void* a, const void* b) {
-	float fa = *(const float*) a;
-	float fb = *(const float*) b;
-	return (fa > fb) - (fa < fb);
-}
-
-/* ==========================================================================
-   1. CORE PRIMITIVE VECTOR RASTERIZATION ENGINE
-   ========================================================================== */
-
-/**
- * PlotSoftwarePixel
- * Direct un-interpolated index writer mapping 8-bit palette tokens to the canvas.
- * Isolated strictly to the texture atlas compilation pass.
- */
-void PlotSoftwarePixel(uint8_t* buffer, int x, int y, int width, int height, uint8_t token) {
-	if (x >= 0 && x < width && y >= 0 && y < height) {
-		buffer[(y * width) + x] = token;
-	}
-}
-
-// GPU Center-Tester Rasterizer
-void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2, int width,
-						int height, uint8_t token) {
-	// 1. Compute Bounding Box (Clamped strictly to canvas limits)
-	int min_x = (x0 < x1) ? ((x0 < x2) ? x0 : x2) : ((x1 < x2) ? x1 : x2);
-	int max_x = (x0 > x1) ? ((x0 > x2) ? x0 : x2) : ((x1 > x2) ? x1 : x2);
-	int min_y = (y0 < y1) ? ((y0 < y2) ? y0 : y2) : ((y1 < y2) ? y1 : y2);
-	int max_y = (y0 > y1) ? ((y0 > y2) ? y0 : y2) : ((y1 > y2) ? y1 : y2);
-
-#ifdef DEBUG_TELEMETRY_TRIANGLE_LEGACY
-	int raw_area = (max_x - min_x + 1) * (max_y - min_y + 1);
-#endif
-
-	if (min_x < 0) {
-		min_x = 0;
-	}
-	if (max_x >= width) {
-		max_x = width - 1;
-	}
-	if (min_y < 0) {
-		min_y = 0;
-	}
-	if (max_y >= height) {
-		max_y = height - 1;
-	}
-
-#ifdef DEBUG_TELEMETRY_TRIANGLE_LEGACY
-	int clamped_area = (max_x - min_x + 1) * (max_y - min_y + 1);
-#endif
-
-	// 2. Precompute Edge Setup Delta Vectors
-	int dx01 = x1 - x0, dy01 = y1 - y0;
-	int dx12 = x2 - x1, dy12 = y2 - y1;
-	int dx20 = x0 - x2, dy20 = y0 - y2;
-
-	// 3. Determine Top/Left Flags for Tie-Breaking (Enforces hardware edge exclusion)
-	bool tl0 = (dy01 < 0) || (dy01 == 0 && dx01 > 0);
-	bool tl1 = (dy12 < 0) || (dy12 == 0 && dx12 > 0);
-	bool tl2 = (dy20 < 0) || (dy20 == 0 && dx20 > 0);
-
-#ifdef DEBUG_TELEMETRY_TRIANGLE_LEGACY
-	int tri_double_area = dx01 * dy12 - dy01 * dx12;
-	bool is_ccw = (tri_double_area > 0);
-
-	// Filter logging footprint down strictly to high-value clock needle entities
-	if (token == 2 || token == 3 || token == 4) {
-		printf("[GPU RASTER AUDIT] UNIT_START | Token: %u | Winding: %s | Analytical Double Area: "
-			   "%d\n",
-			   token, is_ccw ? "CCW" : "CW", tri_double_area);
-		printf("  -> Boundary footprint: Raw Area: %d px | Clamped Screen Area: %d px\n", raw_area,
-			   clamped_area);
-		printf("  -> Geometry Vertices:  V0(%d,%d) -> V1(%d,%d) -> V2(%d,%d)\n", x0, y0, x1, y1, x2,
-			   y2);
-	}
-#endif
-
-	// 4. Processing Loop matching GLSL Fragment Generation Behavior
-	for (int y = min_y; y <= max_y; y++) {
-		float px_y = (float) y + 0.5f; // Sample at half-pixel center vertically
-		int pixels_generated_on_row = 0;
-
-		for (int x = min_x; x <= max_x; x++) {
-			float px_x = (float) x + 0.5f; // Sample at half-pixel center horizontally
-
-			// Cross product vector magnitude checks (Edge Functional Distance)
-			float w0 = (px_x - x0) * dy01 - (px_y - y0) * dx01;
-			float w1 = (px_x - x1) * dy12 - (px_y - y1) * dx12;
-			float w2 = (px_x - x2) * dy20 - (px_y - y2) * dx20;
-
-			// Handle Winding Order Agnosticism (Evaluates both CW and CCW layouts smoothly)
-			bool inside_ccw = (w0 > 0 || (w0 == 0 && tl0)) && (w1 > 0 || (w1 == 0 && tl1))
-				&& (w2 > 0 || (w2 == 0 && tl2));
-
-			bool inside_cw = (w0 < 0 || (w0 == 0 && !tl0)) && (w1 < 0 || (w1 == 0 && !tl1))
-				&& (w2 < 0 || (w2 == 0 && !tl2));
-
-			if (inside_ccw || inside_cw) {
-				buffer[(y * width) + x] = token;
-				pixels_generated_on_row++;
-			}
-		}
-
-#ifdef DEBUG_TELEMETRY_TRIANGLE_LEGACY
-		if ((token == 2 || token == 3 || token == 4) && pixels_generated_on_row > 0) {
-			printf("  [Row Allocation Execution] Row Y: %d | Generated Span: %d px wide\n", y,
-				   pixels_generated_on_row);
-		}
-#endif
-	}
-
-#ifdef DEBUG_TELEMETRY_TRIANGLE_LEGACY
-	if (token == 2 || token == 3 || token == 4) {
-		printf("[GPU RASTER AUDIT] UNIT_COMPLETE\n\n");
-	}
-#endif
 }

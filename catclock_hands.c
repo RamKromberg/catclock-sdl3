@@ -17,21 +17,30 @@
 #include "catclock_shared.h"
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
-#define PORTABLEGL_IMPLEMENTATION
-#define PGL_PREFIX_TYPES
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#pragma GCC diagnostic ignored "-Wunused-variable"
-#pragma GCC diagnostic ignored "-Wunused-function"
-#pragma GCC diagnostic ignored "-Wunknown-pragmas"
-#endif
-#include "portablegl/portablegl.h"
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+#define FLOAT_TO_FIXED24_8(f) ((int32_t) ((f) * 256.0f))
+#define INT_TO_FIXED24_8(i) ((int32_t) ((i) << 8))
+
+/* =========================================================================
+   STRUCTURAL TYPE DEFINITIONS
+   ========================================================================= */
+typedef struct {
+	int dx; /* Exact 1x horizontal pixel offset from focal center */
+	int dy; /* Exact 1x vertical pixel offset from focal center */
+} HandMasterOffset;
+
+typedef struct {
+	float x;
+	float y;
+} gl_Vec2;
+
+typedef struct {
+	int32_t x;
+	int32_t y;
+} gl_Vertex;
 
 const int TEXTURE_CELL_W = 64;
 const int TEXTURE_CELL_H = 96;
@@ -42,795 +51,369 @@ const int ENVELOPE_PAD_Y = 6;
 const int PIVOT_AXIS_X = ENVELOPE_PAD_X + RELATIVE_FOCAL_X;
 const int PIVOT_AXIS_Y = ENVELOPE_PAD_Y + RELATIVE_FOCAL_Y;
 
-// ========================================================================
-// CONFIGURATION ROUTER
-// 0 = WIP PRODUCTION WORK SHADER (ACTUAL RASTER PIPELINE)
-// 1 = CENTERED TRIANGLE TEST
-// 2 = PIVOT-ANCHORED TRIANGLE TEST
-// 3 = CENTERED DIAMOND RASTER TEST
-// 4 = EXPLICIT CCW DIAMOND RASTER TEST
-// 5 = CROSS TEST (LINE TEST)
-// 6 = ISOLATION TEST A: PURE COUNTER-CLOCKWISE (CCW) VERTEX ORDER
-// 7 = ISOLATION TEST B: PURE CLOCKWISE (CW) VERTEX ORDER (FORCES ROTATION)
-// 8 = ISOLATION TEST C: SUBPIXEL SNAP AT EXACT EXPLICIT INTEGER BOUNDS
-// 9 = ISOLATION TEST D: FRACTIONAL BIAS OFFSET TEST (+0.5 PIXEL SHIFT)
-// 10 = FRAME FILL
-// 11 = BOUNDING BOX FILL
-// ========================================================================
-#ifndef TEST_MODE
-#define TEST_MODE 0
-#endif
+/* Master Phase Coordinate Target Array (Strictly Preserved Superellipse Mapping) */
+static const HandMasterOffset HAND_MASTER_OFFSETS[TOTAL_HAND_PHASES]
+	= { { 0, -39 },	  { 4, -39 },	{ 8, -38 },	  { 12, -37 },	{ 15, -35 },  { 19, -32 },
+		{ 22, -30 },  { 24, -27 },	{ 26, -24 },  { 27, -20 },	{ 28, -16 },  { 29, -13 },
+		{ 29, -10 },  { 29, -6 },	{ 29, -3 },	  { 29, 0 },	{ 29, 3 },	  { 29, 6 },
+		{ 29, 10 },	  { 29, 13 },	{ 29, 17 },	  { 29, 21 },	{ 28, 25 },	  { 26, 29 },
+		{ 23, 32 },	  { 20, 35 },	{ 17, 38 },	  { 13, 40 },	{ 9, 42 },	  { 5, 43 },
+		{ 0, 43 },	  { -5, 43 },	{ -9, 42 },	  { -13, 40 },	{ -17, 38 },  { -20, 35 },
+		{ -23, 32 },  { -26, 29 },	{ -28, 25 },  { -29, 21 },	{ -29, 17 },  { -29, 13 },
+		{ -29, 10 },  { -29, 6 },	{ -29, 3 },	  { -29, 0 },	{ -29, -3 },  { -29, -6 },
+		{ -29, -10 }, { -29, -13 }, { -28, -16 }, { -27, -20 }, { -26, -24 }, { -24, -26 },
+		{ -22, -30 }, { -19, -33 }, { -15, -35 }, { -12, -37 }, { -8, -38 },  { -4, -39 } };
 
-// Forward declarations sharing an identical layout payload profile
-static void DrawProductionFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx,
-								float scale, float px_f, float py_f, int px, int py,
-								uint8_t hand_color, uint8_t hand_halo);
-static void CatClock_CalculateHandEndpointsRaster(int phase, float pivot_xf, float pivot_yf,
-												  float scale, int* out_piv_x, int* out_piv_y,
-												  int* out_end_x, int* out_end_y);
+/* =========================================================================
+   CLEAN PIXEL-GRID GEOMETRY UTILITIES
+   ========================================================================= */
 
-// Unified Uniform Structure passing baseline rendering parameters to the shader
-typedef struct {
-	pgl_mat4 projection;
-	pgl_mat4 translation;
-	pgl_mat4 pivot;
-	pgl_mat4 scale;
-} TestUniforms;
+/**
+ * Calculates the baseline unscaled pivot origin absolute coordinate inside the target frame cell
+ * space.
+ */
+static gl_Vec2 CalculateBaselinePivot(int cell_x, int cell_y) {
+	gl_Vec2 pivot;
+	pivot.x = (float) cell_x + (float) PIVOT_AXIS_X;
+	pivot.y = (float) cell_y + (float) PIVOT_AXIS_Y;
+	return pivot;
+}
 
-// Instrumented Vertex Shader capturing internal sub-pixel coordinate steps
-static void test_vert(float* vs_output, pgl_vec4* vertex_attribs, Shader_Builtins* builtins,
-					  void* uniforms) {
-	TestUniforms* uni = (TestUniforms*) uniforms;
-	pgl_vec4 local_pos = vertex_attribs[0];
+/**
+ * Clean baseline float rounding helper.
+ */
+static inline int32_t CleanPixelRound(float val) { return (int32_t) floorf(val + 0.5f); }
 
-	// Explicitly enforce the homogeneous coordinate to preserve matrix translation vectors
-	local_pos.w = 1.0f;
-
-	// 1. Compute the scaled pivot matrix directly via a matrix-matrix product transformation
-	// (Reversing parameters multiplies the scale matrix onto the pivot translation vectors cleanly)
-	pgl_mat4 scaled_pivot;
-	mult_m4_m4(scaled_pivot, uni->scale, uni->pivot);
-
-	// 2. Correct Right-to-Left OpenGL Post-Multiplication Flow Sequence:
-	// Pass the raw local_pos to the scaled_pivot matrix to prevent local geometry double-scaling
-	// errors
-	pgl_vec4 pivoted_pos = mult_m4_v4(scaled_pivot, local_pos);
-	pgl_vec4 world_pos = mult_m4_v4(uni->translation, pivoted_pos);
-	pgl_vec4 ndc_pos = mult_m4_v4(uni->projection, world_pos);
-
-#if (TEST_MODE != 0)
-	static int vertex_trace_count = 0;
-	if (vertex_trace_count++ < 4) {
-		printf("[SHADER-VERT-TRACE] Vert ID: %d\n", vertex_trace_count);
-		printf("  -> Input Local Float Pos: (%.2f, %.2f, %.2f)\n", local_pos.x, local_pos.y,
-			   local_pos.z);
-		printf("  -> Origin Zero Aligned:   (%.2f, %.2f)\n", pivoted_pos.x, pivoted_pos.y);
-		printf("  -> World Space Atlas Pos: (%.2f, %.2f)\n", world_pos.x, world_pos.y);
-		printf("  -> Final Transformed NDC: (%.2f, %.2f, %.2f, %.2f)\n", ndc_pos.x, ndc_pos.y,
-			   ndc_pos.z, ndc_pos.w);
+/**
+ * Symmetric tie breaker pushing floating point offsets outwards from vector alignments cleanly.
+ */
+static inline int32_t SymmetricCrossRound(float base_coord, float displacement, float sign_dir) {
+	float target = base_coord + displacement;
+	if (sign_dir > 0.0f) {
+		return (int32_t) floorf(target + 0.5001f);
+	} else if (sign_dir < 0.0f) {
+		return (int32_t) floorf(target + 0.4999f);
 	}
-#endif
-
-	builtins->gl_Position = ndc_pos;
-
-	// Retain downstream color pass-through varyings via safe full-width array tokens
-	vs_output[0] = vertex_attribs[1].x;
-	vs_output[1] = vertex_attribs[1].y;
-	vs_output[2] = vertex_attribs[1].z;
-	vs_output[3] = vertex_attribs[1].w;
+	return (int32_t) floorf(target + 0.5f);
 }
 
-// Standalone Fragment Shader Callback tracking standard palette states
-static void test_frag(float* fs_input, Shader_Builtins* builtins, void* uniforms) {
-	(void) uniforms;
+/* =========================================================================
+   EXTRACTED REFERENCE GEOMETRY PIPELINE
+   ========================================================================= */
 
-	// Extract the cleanly rasterized interpolated color vectors directly from input varyings
-	builtins->gl_FragColor.x = fs_input[0];
-	builtins->gl_FragColor.y = fs_input[1];
-	builtins->gl_FragColor.z = fs_input[2];
-	builtins->gl_FragColor.w = fs_input[3];
+/**
+ * Computes pixel-perfect reference vertices for a specified hand type and phase at 1x resolution.
+ * This completely isolates structural lookup coordinates from scaling artifacts or context
+ * transformations.
+ */
+void CatClock_ComputeReferenceHandVertices(int cell_x, int cell_y, int hand_type, int phase_idx,
+										   gl_Vertex out_vertices[3]) {
+	int phase = phase_idx % TOTAL_HAND_PHASES;
+
+	/* Structural Constants Initialization matching unscaled 1x reference dimensions */
+	float back_pivot_length = 7.0f;
+	float length_multiplier = 1.000f;
+	float base_width = 3.0f;
+
+	if (hand_type == HAND_TYPE_HOUR) {
+		back_pivot_length = 3.0f;
+		length_multiplier = 3.0f / 7.0f;
+		base_width = 7.0f;
+	} else if (hand_type == HAND_TYPE_MINUTE) {
+		back_pivot_length = 5.0f;
+		length_multiplier = 5.0f / 7.0f;
+		base_width = 5.0f;
+	}
+
+	gl_Vec2 pivot = CalculateBaselinePivot(cell_x, cell_y);
+
+	/* 1. Forward tip target lookup translation */
+	float target_dx = (float) HAND_MASTER_OFFSETS[phase].dx * length_multiplier;
+	float target_dy = (float) HAND_MASTER_OFFSETS[phase].dy * length_multiplier;
+
+	out_vertices[0].x = (int32_t) pivot.x + CleanPixelRound(target_dx);
+	out_vertices[0].y = (int32_t) pivot.y + CleanPixelRound(target_dy);
+
+	/* 2. Tail baseline target lookup (Offset by half phase sequence, 30 steps) */
+	int tail_phase = (phase + 30) % TOTAL_HAND_PHASES;
+	float tail_dx = (float) HAND_MASTER_OFFSETS[tail_phase].dx * length_multiplier;
+	float tail_dy = (float) HAND_MASTER_OFFSETS[tail_phase].dy * length_multiplier;
+
+	/* Anchor tail vector boundary limits cleanly around master bounding space max of 39px */
+	float base_center_xf = pivot.x + (tail_dx * (back_pivot_length / 39.0f));
+	float base_center_yf = pivot.y + (tail_dy * (back_pivot_length / 39.0f));
+
+	/* 3. Pure cross-product table perpendicular lookup array index shift (-15 steps) */
+	int perp_phase = (phase + TOTAL_HAND_PHASES - 15) % TOTAL_HAND_PHASES;
+	float perp_dx = (float) HAND_MASTER_OFFSETS[perp_phase].dx;
+	float perp_dy = (float) HAND_MASTER_OFFSETS[perp_phase].dy;
+
+	/* Extrude width lines symmetrically using matrix ratios */
+	float half_base_width = base_width * 0.5f;
+	float rel_left_x = perp_dx * (half_base_width / 39.0f);
+	float rel_left_y = perp_dy * (half_base_width / 39.0f);
+
+	/* 4. Final target vertex mapping ensuring crisp alignment rules are kept intact */
+	out_vertices[1].x = SymmetricCrossRound(base_center_xf, rel_left_x, perp_dx);
+	out_vertices[1].y = SymmetricCrossRound(base_center_yf, rel_left_y, perp_dy);
+
+	out_vertices[2].x = SymmetricCrossRound(base_center_xf, -rel_left_x, -perp_dx);
+	out_vertices[2].y = SymmetricCrossRound(base_center_yf, -rel_left_y, -perp_dy);
 }
 
-// ============================================================================
-// MAIN PIPELINE ENTRY INTERFACE
-// ============================================================================
+/**
+ * Step 1: Topology Analysis Pass.
+ * Computes exact edge-aligned miter vectors directly from the discrete 1x vertices.
+ * Extrudes corners symmetrically along vertex normals without relying on continuous lookups.
+ */
+void Triangle_GetMinkowskiBiases(const gl_Vertex v1x[3], float scale, gl_Vec2 out_biases[3]) {
+	float push_amt = (scale - 1.0f) * 0.5f;
+
+	// Iterate through all 3 corners to find edge-aligned displacements
+	for (int i = 0; i < 3; i++) {
+		int prev = (i + 2) % 3;
+		int next = (i + 1) % 3;
+
+		// Vector 1: Current point to previous point
+		float e1_x = (float) v1x[prev].x - (float) v1x[i].x;
+		float e1_y = (float) v1x[prev].y - (float) v1x[i].y;
+		float len1 = sqrtf(e1_x * e1_x + e1_y * e1_y);
+		if (len1 > 0.001f) {
+			e1_x /= len1;
+			e1_y /= len1;
+		}
+
+		// Vector 2: Current point to next point
+		float e2_x = (float) v1x[next].x - (float) v1x[i].x;
+		float e2_y = (float) v1x[next].y - (float) v1x[i].y;
+		float len2 = sqrtf(e2_x * e2_x + e2_y * e2_y);
+		if (len2 > 0.001f) {
+			e2_x /= len2;
+			e2_y /= len2;
+		}
+
+		// The vertex miter normal is the normalized inversion of the edge angle bisector
+		float miter_x = -(e1_x + e2_x);
+		float miter_y = -(e1_y + e2_y);
+		float len_miter = sqrtf(miter_x * miter_x + miter_y * miter_y);
+		if (len_miter > 0.001f) {
+			miter_x /= len_miter;
+			miter_y /= len_miter;
+		}
+
+		// Compute the scaling component matching the inner angle expansion rules
+		float inner_dot = (e1_x * e2_x) + (e1_y * e2_y);
+		float sin_half_angle = sqrtf((1.0f - inner_dot) * 0.5f);
+		float miter_scale = (sin_half_angle > 0.1f) ? (1.0f / sin_half_angle) : 1.0f;
+
+		// Map the expanded biases directly to the output structures
+		out_biases[i].x = miter_x * miter_scale * push_amt;
+		out_biases[i].y = miter_y * miter_scale * push_amt;
+	}
+}
+
+void Triangle_ScaleToFixedPoint(const gl_Vertex v1x[3], const gl_Vec2 biases[3], int pivot_x,
+								int pivot_y, float scale, gl_Vertex out_v24_8[3]) {
+	// Convert absolute integer pivot coordinates to 24.8 fixed point base anchors
+	int32_t f_pivot_x = INT_TO_FIXED24_8(pivot_x);
+	int32_t f_pivot_y = INT_TO_FIXED24_8(pivot_y);
+
+	// Calculate the subpixel center-offset of the scaled block canvas space.
+	// For 1.0x scale, this is 0.0f. For 3.0x scale, this is exactly 1.0f pixel unit.
+	float cell_block_offset = (scale - 1.0f) * 0.5f;
+
+	for (int i = 0; i < 3; i++) {
+		// Compute discrete pixel steps relative to the unscaled pivot boundaries
+		int32_t dx_1x = v1x[i].x - PIVOT_AXIS_X;
+		int32_t dy_1x = v1x[i].y - PIVOT_AXIS_Y;
+
+		// Scale the discrete deltas uniformly out into target canvas space
+		float raw_scaled_dx = (float) dx_1x * scale;
+		float raw_scaled_dy = (float) dy_1x * scale;
+
+		// Shift baseline to the true cell block center, then inject Minkowski bias offsets
+		float final_dx = raw_scaled_dx + cell_block_offset + biases[i].x;
+		float final_dy = raw_scaled_dy + cell_block_offset + biases[i].y;
+
+		// Pack final localized offsets directly into fixed-point vertex primitive matrices
+		out_v24_8[i].x = f_pivot_x + FLOAT_TO_FIXED24_8(final_dx);
+		out_v24_8[i].y = f_pivot_y + FLOAT_TO_FIXED24_8(final_dy);
+	}
+}
+
 void CatClock_ShaderHands(void* renderer, int cell_x, int cell_y, int sheet_w, int sheet_h,
 						  int frame_idx, void* userdata) {
 	uint8_t* buffer = (uint8_t*) renderer;
 
-	// Unified Core Metric Pipeline
-	float scale = (float) ctx.current_half_steps / 2.0f;
-	float px_f = (float) cell_x + ((float) PIVOT_AXIS_X * scale);
-	float py_f = (float) cell_y + ((float) PIVOT_AXIS_Y * scale);
-	int px = (int) roundf(px_f);
-	int py = (int) roundf(py_f);
-
-	// Unified Configuration & Palette Block
 	struct {
 		int type;
 		SDL_Color color;
 	}* hand_cfg = (typeof(hand_cfg)) userdata;
 
+	float scale = (float) ctx.current_half_steps / 2.0f;
+
+	uint8_t palette_hand_idx = PALETTE_HAND_SECOND;
 	int hand_type = hand_cfg ? hand_cfg->type : 0;
-	uint8_t hand_color = PALETTE_HAND_SECOND;
-	uint8_t hand_halo = PALETTE_HALO;
-
+	// float mid_factor = 0.45f; // TBD hack for shoulders in 1x triangle if it collapses when
+	// rendering
 	if (hand_type == HAND_TYPE_HOUR) {
-		hand_color = PALETTE_HAND_HOUR;
+		palette_hand_idx = PALETTE_HAND_HOUR;
+		// mid_factor = 0.22f;
 	} else if (hand_type == HAND_TYPE_MINUTE) {
-		hand_color = PALETTE_HAND_MINUTE;
+		palette_hand_idx = PALETTE_HAND_MINUTE;
+		// mid_factor = 0.33f;
 	}
 
-	// Interchangeable calling interface pattern
-	if (TEST_MODE == 0) {
-		DrawProductionFrame(buffer, sheet_w, sheet_h, frame_idx, scale, px_f, py_f, px, py,
-							hand_color, hand_halo);
-		return;
-	}
-
-	// =================================================================
-	// PORTABLEGL UNIFIED TEST FRAMEWORK (MODES 1-9)
-	// =================================================================
-	if (frame_idx != 0 || hand_type != HAND_TYPE_SECOND) {
-		return;
-	}
-
-	printf("[DIAG-FRAME-START] FrameIdx: %d | Scale: %.4f\n", frame_idx, scale);
-	printf("[DIAG-FRAME-PIVOT] Float: (%.4f, %.4f) | Rounded: (%d, %d)\n", px_f, py_f, px, py);
-	printf("[DIAG-FRAME-CONFIG] Target Colors - Color: %u, Halo: %u\n", hand_color, hand_halo);
-
-	GLfloat* target_vertices = NULL;
-	GLsizei vertex_data_size = 0;
-	GLsizei target_vertex_count = 3;
-
-	float mode1_half = 10.0f;
-	float mode2_size = 20.0f;
-
-	/* clang-format off */
-	// Test Mode 1: Symmetrical CCW Primitive Quad Configuration (Biases Removed)
-	GLfloat triangle_vertices_mode1[] = {
-		// Triangle 1 (CCW)
-		-mode1_half, -mode1_half, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Top-Left
-		-mode1_half,  mode1_half, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Bottom-Left
-		 mode1_half, -mode1_half, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Top-Right
-
-		// Triangle 2 (CCW)
-		 mode1_half, -mode1_half, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Top-Right
-		-mode1_half,  mode1_half, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Bottom-Left
-		 mode1_half,  mode1_half, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f  // Bottom-Right
-	};
-
-    // Test Mode 2: Pivot-Anchored Box Configuration projecting cleanly Down and Right
-    GLfloat triangle_vertices_mode2[] = {
-        // Triangle 1 (CCW)
-        0.0f,        0.0f,       0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Pivot Origin
-        0.0f,        mode2_size, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Downward extension
-        mode2_size,  0.0f,       0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Rightward extension
-
-        // Triangle 2 (CCW)
-        mode2_size,  0.0f,       0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Rightward extension
-        0.0f,        mode2_size, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Downward extension
-        mode2_size,  mode2_size, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f  // Bottom-Right Corner
-    };
-	/* clang-format on */
-
-	float diamond_r = 15.0f;
-	/* clang-format off */
-	// Symmetrical Subpixel Edge Calibration Array
-	GLfloat triangle_vertices_mode3[] = {
-		// Triangle 1: Right-half face (Top, Right Tip, Bottom)
-		// Pushing the vertical boundaries slightly right (+0.01f) breaks the tie-break column drop
-		 0.01f,             diamond_r, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f, 
-		 diamond_r + 0.01f, 0.0f,      0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f, 
-		 0.01f,            -diamond_r, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f, 1.0f, 
-
-		// Triangle 2: Left-half face (Top, Bottom, Left Tip)
-		// Pulling the shared spine slightly left (-0.01f) forces coverage evaluation
-		-0.01f,             diamond_r, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f, 
-		-0.01f,            -diamond_r, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f, 
-		-diamond_r - 0.01f, 0.0f,      0.0f, 1.0f,  0.0f, 0.0f, 1.0f, 1.0f  
-	};
-
-	// Test Mode 4: Symmetrical Subpixel Edge-Calibrated Explicit CCW Diamond Configuration
-	GLfloat triangle_vertices_mode4[] = {
-		// Triangle 1 (CCW): Central Top, Left Tip, Central Bottom
-		// Shifting the shared center spine slightly left (-0.01f) and outer tip left (-0.01f)
-		 0.00f - 0.01f,  diamond_r,         0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Central Top
-		-diamond_r - 0.01f, 0.00f,         0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Left Tip
-		 0.00f - 0.01f, -diamond_r,         0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // Central Bottom
-
-		// Triangle 2 (CCW): Central Top, Central Bottom, Right Tip
-		// Shifting the shared center spine slightly right (+0.01f) and outer tip right (+0.01f)
-		 0.00f + 0.01f,  diamond_r,         0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Central Top
-		 0.00f + 0.01f, -diamond_r,         0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, // Central Bottom
-		 diamond_r + 0.01f, 0.00f,         0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f  // Right Tip
-	};
-	/* clang-format on */
-
-	float mode67_offset = 15.0f;
-	// Test Mode 6: Front-Facing CCW Sequence projecting Down and Right
-	GLfloat triangle_vertices_mode6[] = {
-		0.0f,		   0.0f,		  0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // 0: Origin Center Pivot
-		0.0f,		   mode67_offset, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // 1: Downward leg
-		mode67_offset, mode67_offset, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f // 2: Bottom-Right Corner
-	};
-
-	// Test Mode 7: Back-Facing CW Sequence projecting Down and Right
-	GLfloat triangle_vertices_mode7[] = {
-		0.0f,		   0.0f,		  0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // 0: Origin Center Pivot
-		mode67_offset, mode67_offset, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, // 1: Bottom-Right Corner
-		0.0f,		   mode67_offset, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f // 2: Downward leg
-	};
-
-	float mode89_offset = 10.0f;
-	GLfloat triangle_vertices_mode8[] = {
-		0.0f,		   0.0f,		  0.0f, 1.0f,
-		1.0f,		   0.0f,		  0.0f, 1.0f, // Focal Center Pivot
-		mode89_offset, 0.0f,		  0.0f, 1.0f,
-		1.0f,		   0.0f,		  0.0f, 1.0f, // Extends Rightward
-		0.0f,		   mode89_offset, 0.0f, 1.0f,
-		1.0f,		   0.0f,		  0.0f, 1.0f // Extends Downward (Screen Space Symmetrical)
-	};
-	switch (TEST_MODE) {
-	case 1:
-		printf("[TEST-1-INPUT] Centered Triangle Primitive Bounding Configuration:\n");
-		target_vertices = triangle_vertices_mode1;
-		vertex_data_size = sizeof(triangle_vertices_mode1);
-		target_vertex_count = 6;
-		break;
-	case 2:
-		printf("[TEST-2-INPUT] Pivot-Anchored Triangle Box Configuration:\n");
-		target_vertices = triangle_vertices_mode2;
-		vertex_data_size = sizeof(triangle_vertices_mode2);
-		target_vertex_count = 6;
-		break;
-	case 3:
-		printf("[TEST-3-INPUT] Centered Diamond Configuration (Integer Anchored):\n");
-		target_vertices = triangle_vertices_mode3;
-		vertex_data_size = sizeof(triangle_vertices_mode3);
-		target_vertex_count = 6;
-		break;
-	case 4:
-		printf("[TEST-4-INPUT] Explicit CCW Diamond Configuration:\n");
-		target_vertices = triangle_vertices_mode4;
-		vertex_data_size = sizeof(triangle_vertices_mode4);
-		target_vertex_count = 6;
-		break;
-	case 5: {
-		printf("[TEST-5-INPUT] Pure Line Raster Field Check via PortableGL primitives:\n");
-
-#define TEST5_ARM_LEN 15.0f
-
-		/* clang-format off */
-        static GLfloat line_cross_vertices[] = {
-            // Line segment 1: Horizontal Arm (From Left to Right)
-            -TEST5_ARM_LEN, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, //
-            TEST5_ARM_LEN, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, //
-
-            // Line segment 2: Vertical Arm (From Bottom to Top)
-            0.0f, -TEST5_ARM_LEN, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, //
-            0.0f, TEST5_ARM_LEN, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f //
-        };
-		/* clang-format on */
-
-#undef TEST5_ARM_LEN
-
-		target_vertices = line_cross_vertices;
-		vertex_data_size = sizeof(line_cross_vertices);
-		target_vertex_count = 4;
-		break;
-	}
-	case 6:
-		printf("[TEST-6-INPUT] CCW Verification Triangle:\n");
-		target_vertices = triangle_vertices_mode6;
-		vertex_data_size = sizeof(triangle_vertices_mode6);
-		target_vertex_count = 3;
-		break;
-	case 7:
-		printf("[TEST-7-INPUT] CW Verification Triangle:\n");
-		target_vertices = triangle_vertices_mode7;
-		vertex_data_size = sizeof(triangle_vertices_mode7);
-		target_vertex_count = 3;
-		break;
-	case 8:
-		printf("[TEST-8-INPUT] Integer Boundaries Grid Snap Alignment:\n");
-		target_vertices = (GLfloat*) triangle_vertices_mode8;
-		vertex_data_size = sizeof(triangle_vertices_mode8);
-		target_vertex_count = 3;
-		break;
-	case 9: {
-		printf("[TEST-9-INPUT] Fractional +0.5 Subpixel Shift Bias Alignment:\n");
-
-		// 1. Construct the 4x4 translation bias matrix locally
-		pgl_mat4 bias_matrix;
-		translation_m4(bias_matrix, 0.5f, 0.5f, 0.0f);
-
-		// 2. Cast the raw float pointers directly to pgl_vec4 blocks using the 8-float layout
-		// stride index 0 = Vertex 0 Position, index 2 = Vertex 1 Position, index 4 = Vertex 2
-		// Position
-		pgl_vec4* v0_pos = (pgl_vec4*) &triangle_vertices_mode8[0];
-		pgl_vec4* v1_pos = (pgl_vec4*) &triangle_vertices_mode8[8];
-		pgl_vec4* v2_pos = (pgl_vec4*) &triangle_vertices_mode8[16];
-
-		// 3. Multi-multiply positional channels cleanly via standard library wrappers, bypassing
-		// colors
-		*v0_pos = mult_m4_v4(bias_matrix, *v0_pos);
-		*v1_pos = mult_m4_v4(bias_matrix, *v1_pos);
-		*v2_pos = mult_m4_v4(bias_matrix, *v2_pos);
-
-		target_vertices = (GLfloat*) triangle_vertices_mode8;
-		vertex_data_size = sizeof(triangle_vertices_mode8);
-		target_vertex_count = 3;
-		break;
-	}
-	case 10: {
-		printf("[TEST-10-INPUT] Rendering full scale-invariant cell envelope quad via PortableGL "
-			   "Triangles:\n");
-
-// Apply a negative bias matching the pivot offset to shift the local origin back to the cell
-// boundaries
-#define TEST10_MIN_X ((GLfloat) (1.0f - PIVOT_AXIS_X))
-#define TEST10_MAX_X ((GLfloat) (TEXTURE_CELL_W - 1.0f - PIVOT_AXIS_X))
-#define TEST10_MIN_Y ((GLfloat) (1.0f - PIVOT_AXIS_Y))
-#define TEST10_MAX_Y ((GLfloat) (TEXTURE_CELL_H - 1.0f - PIVOT_AXIS_Y))
-
-		/* clang-format off */
-        static GLfloat cell_quad_vertices[] = {
-            // Triangle 1 (Top-Left, Top-Right, Bottom-Left)
-            TEST10_MIN_X, TEST10_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST10_MAX_X, TEST10_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST10_MIN_X, TEST10_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-
-            // Triangle 2 (Top-Right, Bottom-Right, Bottom-Left)
-            TEST10_MAX_X, TEST10_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST10_MAX_X, TEST10_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST10_MIN_X, TEST10_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f
-        };
-		/* clang-format on */
-
-#undef TEST10_MIN_X
-#undef TEST10_MAX_X
-#undef TEST10_MIN_Y
-#undef TEST10_MAX_Y
-
-		target_vertices = cell_quad_vertices;
-		vertex_data_size = sizeof(cell_quad_vertices);
-		target_vertex_count = 6;
-		break;
-	}
-	case 11: {
-		printf("[TEST-11-INPUT] Rendering full production cell asset quad (59x83) via PioneerGL "
-			   "Triangles:\n");
-
-// Establish production asset bounds anchored to padding parameters and neutralized to pivot space
-#define TEST11_MIN_X ((GLfloat) (ENVELOPE_PAD_X - PIVOT_AXIS_X))
-#define TEST11_MAX_X ((GLfloat) (ENVELOPE_PAD_X + 59.0f - PIVOT_AXIS_X))
-#define TEST11_MIN_Y ((GLfloat) (ENVELOPE_PAD_Y - PIVOT_AXIS_Y))
-#define TEST11_MAX_Y ((GLfloat) (ENVELOPE_PAD_Y + 83.0f - PIVOT_AXIS_Y))
-
-		/* clang-format off */
-        static GLfloat production_quad_vertices[] = {
-            // Triangle 1 (Top-Left, Top-Right, Bottom-Left)
-            TEST11_MIN_X, TEST11_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST11_MAX_X, TEST11_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST11_MIN_X, TEST11_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-
-            // Triangle 2 (Top-Right, Bottom-Right, Bottom-Left)
-            TEST11_MAX_X, TEST11_MIN_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST11_MAX_X, TEST11_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f,
-            TEST11_MIN_X, TEST11_MAX_Y, 0.0f, 1.0f,   1.0f, 0.0f, 0.0f, 1.0f
-        };
-		/* clang-format on */
-
-#undef TEST11_MIN_X
-#undef TEST11_MAX_X
-#undef TEST11_MIN_Y
-#undef TEST11_MAX_Y
-
-		target_vertices = production_quad_vertices;
-		vertex_data_size = sizeof(production_quad_vertices);
-		target_vertex_count = 6;
-		break;
-	}
-	default:
-		return;
-	}
-
-	static glContext native_ctx;
-	static uint32_t* intermediate_fb = NULL;
-	static uint32_t* heap_fb_container = NULL;
-	static int allocated_w = 0;
-	static int allocated_h = 0;
-
-	printf("[HOST-BUFFER-TRACE] Sheet Dimensions: %d x %d | Current Allocated: %d x %d\n", sheet_w,
-		   sheet_h, allocated_w, allocated_h);
-
-	if (!intermediate_fb || allocated_w != sheet_w || allocated_h != sheet_h) {
-		if (intermediate_fb) {
-			free(intermediate_fb);
-		}
-		int total_pixels = sheet_w * sheet_h;
-		intermediate_fb = (uint32_t*) calloc(total_pixels, sizeof(uint32_t));
-		heap_fb_container = intermediate_fb;
-
-		allocated_w = sheet_w;
-		allocated_h = sheet_h;
-
-		printf("[HOST-BUFFER-TRACE] Invoking init_glContext allocation cell address: %p\n",
-			   (void*) heap_fb_container);
-		if (!init_glContext(&native_ctx, &heap_fb_container, sheet_w, sheet_h)) {
-			fprintf(stderr, "[PortableGL Error] Failed to bind state machine layout properties\n");
-			return;
-		}
-	}
-
-	set_glContext(&native_ctx);
-
-	glViewport(0, 0, sheet_w, sheet_h);
-
-	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
-
-	GLuint vbo, vao;
-	glGenVertexArrays(1, &vao);
-	glBindVertexArray(vao);
-
-	glGenBuffers(1, &vbo);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, vertex_data_size, target_vertices, GL_STATIC_DRAW);
-
-	// Position Channel (Location 0, Stride = 8 floats)
-	glEnableVertexAttribArray(0);
-	glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(GLfloat), 0);
-
-	// Color Channel (Location 1, Stride = 8 floats, Offset = 4 floats)
-	glEnableVertexAttribArray(1);
-	glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(GLfloat),
-						  (void*) (4 * sizeof(GLfloat)));
-
-	// Initialize the 4-float continuous interpolation array using PortableGL's native macros
-	GLenum interpolation_map[4] = { PGL_SMOOTH4 };
-	GLuint program_obj = pglCreateProgram(test_vert, test_frag, 4, interpolation_map, GL_FALSE);
-	glUseProgram(program_obj);
-
-	/* Host initialization block */
-
-	TestUniforms uniform_data;
-
-	// 1. Structural Scaling Transformation Stage
-	scale_m4(uniform_data.scale, scale, scale, 1.0f);
-
-	// 2. Base Asset Focal Pivot Translation Matrix (Pristine 1x Constants)
-	translation_m4(uniform_data.pivot, (float) PIVOT_AXIS_X, (float) PIVOT_AXIS_Y, 0.0f);
-
-	// 3. Atlas Master Canvas Cell Allocation Translation Stage (Pristine Integer Bounds)
-	translation_m4(uniform_data.translation, (float) cell_x, (float) cell_y, 0.0f);
-
-	// 4. Inverted Top-Down Orthographic Screen Space Projection Stage
-	make_orthographic_m4(uniform_data.projection, 0.0f, (float) sheet_w, (float) sheet_h, 0.0f,
-						 -1.0f, 1.0f);
-
-	// Commit cleanly to the PortableGL pipeline context
-	pglSetUniform(&uniform_data);
-
-	if (TEST_MODE == 5) {
-		glLineWidth(scale);
-		glDrawArrays(GL_LINES, 0, target_vertex_count);
-	} else {
-		glDrawArrays(GL_TRIANGLES, 0, target_vertex_count);
-	}
-
-	printf("[HOST-DIAG-AFTER-DRAW] Checking rasterization inside intermediate buffer raw "
-		   "bounds...\n");
-
-	int filled_pixel_count = 0;
-	for (int y = 0; y < sheet_h; ++y) {
-		int target_y = y;
-		for (int x = 0; x < sheet_w; ++x) {
-			int src_offset_idx = y * sheet_w + x;
-			int dst_offset_idx = target_y * sheet_w + x;
-			uint32_t active_pixel = intermediate_fb[src_offset_idx];
-			if (active_pixel != 0) {
-				if (filled_pixel_count < 5) {
-					printf("[BLIT-TRACE] Raster Source Row y=%d, x=%d maps to Target "
-						   "buffer_y=%d\n",
-						   y, x, target_y);
-				}
-				uint8_t red_component = (uint8_t) (active_pixel & 0x000000FF);
-				uint8_t blue_component = (uint8_t) ((active_pixel & 0x00FF0000) >> 16);
-				if (red_component == 0xFF) {
-					buffer[dst_offset_idx] = hand_color;
-				} else if (blue_component == 0xFF) {
-					buffer[dst_offset_idx] = hand_halo;
-				} else {
-					buffer[dst_offset_idx] = hand_color;
-				}
-				filled_pixel_count++;
-			}
-		}
-	}
-	printf("[HOST-PALETTE-TRACE] Extraction Cycle Finished. Total Pixels Written = %d\n",
-		   filled_pixel_count);
-
-	glUseProgram(0);
-	glBindVertexArray(0);
-	glDeleteVertexArrays(1, &vao);
-	glDeleteBuffers(1, &vbo);
-
-	if (scale == 2.0000f) {
-		printf("\n[BUFFER-AUDIT-RLE] COMPRESSED FRAMEBUFFER PROFILE (W:128, H:192):\n");
-
-		for (int test_y = 0; test_y < 192; test_y++) {
-			// Only allocate processing time if the row isn't totally blank noise
-			char row_chars[128];
-			int is_empty_row = 1;
-
-			for (int test_x = 0; test_x < 128; test_x++) {
-				uint32_t target_offset = test_y * sheet_w + test_x;
-				uint8_t pixel_val = buffer[target_offset];
-
-				if (pixel_val == hand_color) {
-					row_chars[test_x] = '1';
-					is_empty_row = 0;
-				} else if (pixel_val == hand_halo) {
-					row_chars[test_x] = 'H';
-					is_empty_row = 0;
-				} else if (pixel_val != 0) {
-					row_chars[test_x] = 'X';
-					is_empty_row = 0;
-				} else {
-					row_chars[test_x] = '.';
-				}
-			}
-
-			// Completely empty lines are compressed to a single token placeholder
-			if (is_empty_row) {
-				printf("R%03d:MT\n", test_y);
-				continue;
-			}
-
-			// Perform structural Run-Length Encoding across active pixel data
-			printf("R%03d:", test_y);
-			int rle_idx = 0;
-			while (rle_idx < 128) {
-				char current_char = row_chars[rle_idx];
-				int run_length = 1;
-
-				while ((rle_idx + run_length < 128)
-					   && (row_chars[rle_idx + run_length] == current_char)) {
-					run_length++;
-				}
-
-				printf("[%d*%c]", run_length, current_char);
-				rle_idx += run_length;
-			}
-			printf("\n");
-		}
-		printf("[BUFFER-AUDIT] Final Compressed Frame Pass Complete\n\n");
-	}
-	printf("[DIAG-FRAME-STOP] FrameIdx: %d Execution Matrix End\n\n", frame_idx);
-}
-
-/* --- Production Code --- */
-
-typedef struct {
-	int dx; // Exact 1x horizontal pixel offset from focal center
-	int dy; // Exact 1x vertical pixel offset from focal center
-} HandMasterOffset;
-
-static const HandMasterOffset HAND_MASTER_OFFSETS[TOTAL_HAND_PHASES] = {
-	{ 0, -39 }, // Phase 0
-	{ 4, -39 }, // Phase 1
-	{ 8, -38 }, // Phase 2
-	{ 12, -37 }, // Phase 3
-	{ 15, -35 }, // Phase 4
-	{ 19, -32 }, // Phase 5
-	{ 22, -30 }, // Phase 6
-	{ 24, -27 }, // Phase 7
-	{ 26, -24 }, // Phase 8
-	{ 27, -20 }, // Phase 9
-	{ 28, -16 }, // Phase 10
-	{ 29, -13 }, // Phase 11
-	{ 29, -10 }, // Phase 12
-	{ 29, -6 }, // Phase 13
-	{ 29, -3 }, // Phase 14
-	{ 29, 0 }, // Phase 15
-	{ 29, 3 }, // Phase 16
-	{ 29, 6 }, // Phase 17
-	{ 29, 10 }, // Phase 18
-	{ 29, 13 }, // Phase 19
-	{ 29, 17 }, // Phase 20
-	{ 29, 21 }, // Phase 21
-	{ 28, 25 }, // Phase 22
-	{ 26, 29 }, // Phase 23
-	{ 23, 32 }, // Phase 24
-	{ 20, 35 }, // Phase 25
-	{ 17, 38 }, // Phase 26
-	{ 13, 40 }, // Phase 27
-	{ 9, 42 }, // Phase 28
-	{ 5, 43 }, // Phase 29
-	{ 0, 43 }, // Phase 30
-	{ -5, 43 }, // Phase 31
-	{ -9, 42 }, // Phase 32
-	{ -13, 40 }, // Phase 33
-	{ -17, 38 }, // Phase 34
-	{ -20, 35 }, // Phase 35
-	{ -23, 32 }, // Phase 36
-	{ -26, 29 }, // Phase 37
-	{ -28, 25 }, // Phase 38
-	{ -29, 21 }, // Phase 39
-	{ -29, 17 }, // Phase 40
-	{ -29, 13 }, // Phase 41
-	{ -29, 10 }, // Phase 42
-	{ -29, 6 }, // Phase 43
-	{ -29, 3 }, // Phase 44
-	{ -29, 0 }, // Phase 45
-	{ -29, -3 }, // Phase 46
-	{ -29, -6 }, // Phase 47
-	{ -29, -10 }, // Phase 48
-	{ -29, -13 }, // Phase 49
-	{ -28, -16 }, // Phase 50
-	{ -27, -20 }, // Phase 51
-	{ -26, -24 }, // Phase 52
-	{ -24, -26 }, // Phase 53
-	{ -22, -30 }, // Phase 54
-	{ -19, -33 }, // Phase 55
-	{ -15, -35 }, // Phase 56
-	{ -12, -37 }, // Phase 57
-	{ -8, -38 }, // Phase 58
-	{ -4, -39 } // Phase 59
-};
-
-typedef struct {
-	float bias_x;
-	float bias_y;
-} PhaseRasterCorrection;
-
-// Core Mapping Generator evaluating the discrete tie-break flips of the rasterizer
-void CatClock_GeneratePhaseCorrections(float scale, const HandMasterOffset* master_offsets,
-									   PhaseRasterCorrection* out_corrections) {
-	float int_part;
-	float frac_part = modff(scale, &int_part);
-	int is_even_scale = (frac_part == 0.0f) && ((int) int_part % 2 == 0);
-
-	// An inverse-scale micro-step guarantees that the final subpixel shift
-	// evaluated inside the shader context remains exactly 0.01f at ALL resolutions.
-	float micro_step = 0.01f / scale;
-
-	for (int phase = 0; phase < TOTAL_HAND_PHASES; phase++) {
-		HandMasterOffset offset = master_offsets[phase];
-
-		// 1. Establish the base primitive phase assignment profile
-		float bx = is_even_scale ? 0.50f : 0.00f;
-		float by = is_even_scale ? 0.50f : 0.00f;
-
-		// 2. Adjust for Angular Quadrant Skew Signs
-		// We inject the micro-step to push edge equations cleanly past
-		// the rasterizer's step-ladder rounding limits.
-		if (offset.dx >= 0 && offset.dy < 0) { // Quadrant 1 (Up-Right)
-			bx += micro_step;
-			by -= micro_step;
-		} else if (offset.dx >= 0 && offset.dy >= 0) { // Quadrant 2 (Down-Right)
-			bx += micro_step;
-			by += micro_step;
-		} else if (offset.dx < 0 && offset.dy >= 0) { // Quadrant 3 (Down-Left)
-			bx -= micro_step;
-			by += micro_step;
-		} else { // Quadrant 4 (Up-Left)
-			bx -= micro_step;
-			by -= micro_step;
-		}
-
-		// 3. Compensate for Shared Internal Spine Edge Truncations
-		// If an arm coordinate falls directly on a grid symmetry node,
-		// we pull it slightly to force consistent top-left coverage.
-		if ((offset.dx == 0) && !is_even_scale) {
-			bx += 0.25f / scale;
-		}
-		if ((offset.dy == 0) && !is_even_scale) {
-			by += 0.25f / scale;
-		}
-
-		out_corrections[phase].bias_x = bx;
-		out_corrections[phase].bias_y = by;
-	}
-}
-
-/**
- * TIER 1: CORE GEOMETRIC FUNCTION (Floating-Point)
- * Computes pure continuous geometric endpoints.
- */
-static void CatClock_CalculateHandEndpointsFloat(int phase, float pivot_x, float pivot_y,
-												 float scale, float* out_end_x, float* out_end_y) {
-	if (phase < 0 || phase >= TOTAL_HAND_PHASES) {
-		if (out_end_x)
-			*out_end_x = pivot_x;
-		if (out_end_y)
-			*out_end_y = pivot_y;
-		return;
-	}
-
-	HandMasterOffset offset = HAND_MASTER_OFFSETS[phase];
-
-	if (out_end_x) {
-		*out_end_x = pivot_x + ((float) offset.dx * scale);
-	}
-	if (out_end_y) {
-		*out_end_y = pivot_y + ((float) offset.dy * scale);
-	}
-}
-
-/**
- * TIER 2: GEOMETRIC WRAPPER (Integer Pass-through)
- * Exposes raw un-biased scale metrics into integer coordinate properties.
- */
-__attribute__((unused)) static void
-CatClock_CalculateHandEndpoints(int phase, int pivot_x, int pivot_y, float scale, int cell_x,
-								int cell_y, int* out_end_x, int* out_end_y) {
-	float float_out_x = 0.0f;
-	float float_out_y = 0.0f;
-
-	CatClock_CalculateHandEndpointsFloat(phase, (float) pivot_x, (float) pivot_y, scale,
-										 &float_out_x, &float_out_y);
-
-	if (out_end_x)
-		*out_end_x = (int) roundf(float_out_x);
-	if (out_end_y)
-		*out_end_y = (int) roundf(float_out_y);
-
-	(void) cell_x;
-	(void) cell_y;
-}
-
-/**
- * TIER 3: RASTERIZER COMPENSATION WRAPPER
- * Direct master asset extraction layout loop. Performs scale mapping first, then
- * rounds to the nearest grid step using roundf() to preserve geometric symmetry.
- */
-static void CatClock_CalculateHandEndpointsRaster(int phase, float pivot_xf, float pivot_yf,
-												  float scale, int* out_piv_x, int* out_piv_y,
-												  int* out_end_x, int* out_end_y) {
-	int final_piv_x = (int) floorf(pivot_xf + 0.5f);
-	int final_piv_y = (int) floorf(pivot_yf + 0.5f);
-
-	int safe_phase = phase % TOTAL_HAND_PHASES;
-	if (safe_phase < 0)
-		safe_phase += TOTAL_HAND_PHASES;
-	HandMasterOffset offset = HAND_MASTER_OFFSETS[safe_phase];
-
-	int scaled_dx = (int) roundf((float) offset.dx * scale);
-	int scaled_dy = (int) roundf((float) offset.dy * scale);
-
-	if (out_piv_x)
-		*out_piv_x = final_piv_x;
-	if (out_piv_y)
-		*out_piv_y = final_piv_y;
-	if (out_end_x)
-		*out_end_x = final_piv_x + scaled_dx;
-	if (out_end_y)
-		*out_end_y = final_piv_y + scaled_dy;
-}
-
-static void DrawProductionFrame(uint8_t* buffer, int sheet_w, int sheet_h, int frame_idx,
-								float scale, float px_f, float py_f, int px, int py,
-								uint8_t hand_color, uint8_t hand_halo) {
-	(void) px;
-	(void) py;
-	(void) hand_halo;
-
-	int target_piv_x, target_piv_y, target_end_x, target_end_y;
+	/* ------------------------------------------------------------------------
+	   ATLAS RE-CENTERING STAGE
+	   ------------------------------------------------------------------------ */
+	// KEEP THE MASTER PIVOT AT THE TOP-LEFT CORNER GRID BOUNDARY
+	// Do not inject the cell_block_offset here, as it will double-drift the matrix downstream
+	float px_f = (float) cell_x + ((float) PIVOT_AXIS_X * scale);
+	float py_f = (float) cell_y + ((float) PIVOT_AXIS_Y * scale);
+
+	int px = (int) roundf(px_f);
+	int py = (int) roundf(py_f);
+
+	/* ------------------------------------------------------------------------
+	   GEOMETRY MAPPING
+	   ------------------------------------------------------------------------ */
+	gl_Vertex vertices1x[3];
+	CatClock_ComputeReferenceHandVertices(0, 0, hand_type, frame_idx, vertices1x);
+
+	gl_Vec2 minkowski_biases[3];
+	Triangle_GetMinkowskiBiases(vertices1x, scale, minkowski_biases);
+
+	gl_Vertex vertices24_8[3];
+
+	// Apply the single cell_block_offset to the relative deltas
+	Triangle_ScaleToFixedPoint(vertices1x, minkowski_biases, px, py, scale, vertices24_8);
+
+	/* ------------------------------------------------------------------------
+	   RENDERING
+	   ------------------------------------------------------------------------ */
+#if (1)
+	DrawTriangleFixedSDF(buffer, vertices24_8[0].x, vertices24_8[0].y, vertices24_8[1].x,
+						 vertices24_8[1].y, vertices24_8[2].x, vertices24_8[2].y, sheet_w, sheet_h,
+						 palette_hand_idx);
+	/*
+	DrawTriangleFixed(buffer, vertices24_8[0].x, vertices24_8[0].y, vertices24_8[1].x,
+					  vertices24_8[1].y, vertices24_8[2].x, vertices24_8[2].y, sheet_w, sheet_h,
+					  palette_hand_idx);
+	*/
+	/*
+	DrawTriangleFloat(buffer, (float) vertices24_8[0].x / 256.0f,
+					  (float) vertices24_8[0].y / 256.0f, (float) vertices24_8[1].x / 256.0f,
+					  (float) vertices24_8[1].y / 256.0f, (float) vertices24_8[2].x / 256.0f,
+					  (float) vertices24_8[2].y / 256.0f, sheet_w, sheet_h, palette_hand_idx);
+	*/
+#else
+	/* -------------------------------------------------------------------------
+	   DIAGNOSTIC PRINT TELEMETRY
+	   ------------------------------------------------------------------------- */
 	int phase = frame_idx % TOTAL_HAND_PHASES;
+	gl_Vertex plotted_vertices[3];
+	plotted_vertices[0].x = (vertices24_8[0].x + 128) >> 8;
+	plotted_vertices[0].y = (vertices24_8[0].y + 128) >> 8;
+	plotted_vertices[1].x = (vertices24_8[1].x + 128) >> 8;
+	plotted_vertices[1].y = (vertices24_8[1].y + 128) >> 8;
+	plotted_vertices[2].x = (vertices24_8[2].x + 128) >> 8;
+	plotted_vertices[2].y = (vertices24_8[2].y + 128) >> 8;
 
-	CatClock_CalculateHandEndpointsRaster(phase, px_f, py_f, scale, &target_piv_x, &target_piv_y,
-										  &target_end_x, &target_end_y);
-
-	int int_scale_factor = (int) floorf(scale);
-	if (int_scale_factor < 1) {
-		int_scale_factor = 1;
+	if (phase == 0 || phase == 1 || phase == 15 || phase == 30) {
+		printf("[Output-State][Phase:%2d] Scale:%0.2f | Core Metric Pivot:(%3d,%3d)\n", phase,
+			   scale, px, py);
+		printf("  -> Final 24.8 Absolute V0(Tip) : (%5.2f, %5.2f) -> Plotted Pixel: (%3d, %3d)\n",
+			   (float) vertices24_8[0].x / 256.0f, (float) vertices24_8[0].y / 256.0f,
+			   plotted_vertices[0].x, plotted_vertices[0].y);
+		printf("  -> Final 24.8 Absolute V1(Left) : (%5.2f, %5.2f) -> Plotted Pixel: (%3d, %3d)\n",
+			   (float) vertices24_8[1].x / 256.0f, (float) vertices24_8[1].y / 256.0f,
+			   plotted_vertices[1].x, plotted_vertices[1].y);
+		printf("  -> Final 24.8 Absolute V2(Right): (%5.2f, %5.2f) -> Plotted Pixel: (%3d, %3d)\n",
+			   (float) vertices24_8[2].x / 256.0f, (float) vertices24_8[2].y / 256.0f,
+			   plotted_vertices[2].x, plotted_vertices[2].y);
+		printf("\n");
 	}
-/*
-	DrawLineLikeMesa(buffer, sheet_w, sheet_h, (float) target_piv_x, (float) target_piv_y,
-					 (float) target_end_x, (float) target_end_y, (float) int_scale_factor,
-					 hand_color);
-*/
+
+	/* -------------------------------------------------------------------------
+	   DIAGNOSTIC DRAWING TELEMETRY
+	   ------------------------------------------------------------------------- */
+	// Calculate the continuous coordinates of the tip vertex (V0) directly from fixed-point
+	float tip_xf = (float) vertices24_8[0].x / 256.0f;
+	float tip_yf = (float) vertices24_8[0].y / 256.0f;
+
+	// Isolate the fractional component of the continuous coordinates
+	float tip_frac_x = tip_xf - floorf(tip_xf);
+	float tip_frac_y = tip_yf - floorf(tip_yf);
+
+	// Plot the standard rounded primary tip pixel
+	PlotSoftwarePixel(buffer, plotted_vertices[0].x, plotted_vertices[0].y, sheet_w, sheet_h,
+					  palette_hand_idx);
+
+	// 2x Validation Splitting Pass: Detect half-pixel alignment boundaries
+	if (scale == 2.0f || (fabsf(scale - floorf(scale)) > 0.01f)) {
+		// If the X coordinate sits perfectly on a half-pixel seam (e.g., Phase 0 pointing up)
+		if (fabsf(tip_frac_x - 0.5f) < 0.1f) {
+			// Extrude an adjacent horizontal pixel to form a balanced 2-pixel wide tip
+			int extra_tip_x = (tip_xf > (float) plotted_vertices[0].x) ? plotted_vertices[0].x + 1
+																	   : plotted_vertices[0].x - 1;
+			PlotSoftwarePixel(buffer, extra_tip_x, plotted_vertices[0].y, sheet_w, sheet_h,
+							  palette_hand_idx);
+
+			if (phase == 0) {
+				printf("[Validation][Tip:2x] Horizontal split detected. Plotted 2px wide tip at X: "
+					   "%d and %d\n",
+					   plotted_vertices[0].x, extra_tip_x);
+			}
+		}
+		// If the Y coordinate sits perfectly on a half-pixel seam (e.g., Phase 15 pointing
+		// horizontally)
+		if (fabsf(tip_frac_y - 0.5f) < 0.1f) {
+			// Extrude an adjacent vertical pixel to maintain thickness consistency
+			int extra_tip_y = (tip_yf > (float) plotted_vertices[0].y) ? plotted_vertices[0].y + 1
+																	   : plotted_vertices[0].y - 1;
+			PlotSoftwarePixel(buffer, plotted_vertices[0].x, extra_tip_y, sheet_w, sheet_h,
+							  palette_hand_idx);
+		}
+	}
+	PlotSoftwarePixel(buffer, plotted_vertices[1].x, plotted_vertices[1].y, sheet_w, sheet_h,
+					  palette_hand_idx);
+	PlotSoftwarePixel(buffer, plotted_vertices[2].x, plotted_vertices[2].y, sheet_w, sheet_h,
+					  palette_hand_idx);
+
+	/* -------------------------------------------------------------------------
+		SUBPIXEL CENTER-PIN CLUSTER RASTERIZATION PASS
+	   ------------------------------------------------------------------------- */
+	// Plot the standard rounded primary apex pixel
+	float cell_block_offset = (scale - 1.0f) * 0.5f;
+	float final_pin_xf = (float) px + cell_block_offset;
+	float final_pin_yf = (float) py + cell_block_offset;
+
+	// Check if the current scale produces a perfect fractional 0.5 pixel split
+	float internal_part_x = final_pin_xf - floorf(final_pin_xf);
+	float internal_part_y = final_pin_yf - floorf(final_pin_yf);
+
+	if (scale == 2.0f
+		|| (fabsf(internal_part_x - 0.5f) < 0.01f && fabsf(internal_part_y - 0.5f) < 0.01f)) {
+		// Even-scale workaround: Extrude a 4-pixel sub-grid around the center boundary
+		int base_x = (int) floorf(final_pin_xf);
+		int base_y = (int) floorf(final_pin_yf);
+
+		PlotSoftwarePixel(buffer, base_x, base_y, sheet_w, sheet_h, palette_hand_idx);
+		PlotSoftwarePixel(buffer, base_x + 1, base_y, sheet_w, sheet_h, palette_hand_idx);
+		PlotSoftwarePixel(buffer, base_x, base_y + 1, sheet_w, sheet_h, palette_hand_idx);
+		PlotSoftwarePixel(buffer, base_x + 1, base_y + 1, sheet_w, sheet_h, palette_hand_idx);
+
+		if (phase == 0) {
+			printf("[Validation][Scale:2x] Split-pixel center cluster plotted at base index (%d, "
+				   "%d)\n",
+				   base_x, base_y);
+		}
+	} else {
+		// Odd scale or fractional fallback: standard clean midpoint rounding
+		int pin_offset = (int) cell_block_offset;
+		PlotSoftwarePixel(buffer, px + pin_offset, py + pin_offset, sheet_w, sheet_h,
+						  palette_hand_idx);
+	}
+#endif
 }

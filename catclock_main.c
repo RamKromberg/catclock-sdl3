@@ -40,7 +40,6 @@ int target_fps_limit = DEFAULT_FPS;
 /* ==========================================================================
    OS WINDOW LEVEL EVENT CAPTURE & INTERACTION HOOKS
    ========================================================================== */
-#ifndef TEST_MODE
 /**
  * WidgetWindowHitTest
  * Captures custom desktop mouse interactions. Uses the unscaled 1-bit XBM
@@ -75,7 +74,6 @@ static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window* win, const SDL_
 
 	return is_solid ? SDL_HITTEST_DRAGGABLE : SDL_HITTEST_NORMAL;
 }
-#endif
 
 /* ==========================================================================
    APPLICATION ENTRY RUNTIME LAYER
@@ -149,7 +147,6 @@ int main(int argc, char* argv[]) {
 	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
 	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 284.0f;
 
-#ifndef TEST_MODE
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int target_w = (int) (baseline_w * scale);
 	int target_h = (int) (baseline_h * scale);
@@ -170,7 +167,6 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
-
 	/* Anchor our 1-bit custom hit tester loop onto the window abstraction */
 	SDL_SetWindowHitTest(ctx.window, WidgetWindowHitTest, NULL);
 
@@ -193,6 +189,7 @@ int main(int argc, char* argv[]) {
 		= { .logger.func = slog_func,
 			.environment = { .defaults = { .color_format = SG_PIXELFORMAT_RGBA8 } } };
 	sg_setup(&sokol_description);
+
 	if (!sg_isvalid()) {
 		fprintf(stderr, "[Fatal Error] Sokol GFX framework context layer validation failure.\n");
 		SDL_GL_MakeCurrent(ctx.window, NULL);
@@ -215,7 +212,6 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
-#endif
 	printf("[Verification] Entering interactive runtime event processing layout loop...\n");
 
 	struct {
@@ -299,30 +295,27 @@ int main(int argc, char* argv[]) {
 
 		/* Regenerate asset textures on the CPU only when cache check state flags shift */
 		if (ctx.texture_cache_stale) {
-#ifndef TEST_MODE
 			CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &hour_cfg);
 			CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &min_cfg);
-#endif
 			CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 										CatClock_ShaderHands, &sec_cfg);
-#ifdef TEST_MODE
-			(void) hour_cfg;
-			(void) min_cfg;
-			(void) tail_data;
-			running = false;
-#endif
-#ifndef TEST_MODE
 			CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
 										CatClock_ShaderEyes, NULL); // Fixed to ctx.target_fps
 			CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
 										CatClock_ShaderTail, &tail_data);
+
+			// TODO 1: Load static layout assets to VRAM.
+			// TODO 1.1: Write shader to display the layout.
+			// TODO 2: Load dynamic atlas assets to VRAM.
+			// TODO 2.1: Shuffle the atlas.
+#ifdef DEBUG_DUMP
 			Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
-#endif
-			ctx.texture_cache_stale = false;
 			printf("[Trace] Dynamic textures cached and committed to disk files at half-step: %u\n",
 				   ctx.current_half_steps);
+#endif
+			ctx.texture_cache_stale = false;
 		}
 
 		/* Placeholder Graphics Render Pass: Clear the window using the context background token */
@@ -348,8 +341,9 @@ int main(int argc, char* argv[]) {
 		ctx.current_frame_step++;
 	}
 
+#ifdef DEBUG_DUMP
 	printf("[Trace] Validation pass finished. Component layout extraction complete.\n");
-	/* Release computing resources clean before teardown exit */
+#endif
 
 	/* Release computing resources clean before teardown exit */
 	CatClock_DestroyComputeAtlas(&ctx.hours_atlas);
@@ -357,7 +351,7 @@ int main(int argc, char* argv[]) {
 	CatClock_DestroyComputeAtlas(&ctx.seconds_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.eyes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.tail_atlas);
-#ifndef TEST_MODE
+
 	/* RE-ALIGNED: Free resources clean via local stack container */
 	if (runtime_xbm_handle) {
 		CatClock_DestroyXbmLibrary(runtime_xbm_handle);
@@ -369,7 +363,7 @@ int main(int argc, char* argv[]) {
 	SDL_GL_DestroyContext(gl_context);
 	SDL_DestroyWindow(ctx.window);
 	SDL_Quit();
-#endif
+
 	printf("[Trace] Execution Context terminated cleanly.\n");
 	return 0;
 }

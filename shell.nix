@@ -33,13 +33,6 @@ let
     '';
   };
 
-  portablegl = pkgs.fetchFromGitHub {
-    owner = "rswinkle";
-    repo = "portablegl";
-    rev = "0.100.0"; 
-    sha256 = "sha256-OOqQFIXHiGfNK/CwK7qkGY6NRyhUbQ8hw5aVuLksXdM==";
-  };
-
   my-python-env = pkgs.python3.withPackages (ps: with ps; [
     opencv4
     numpy
@@ -101,10 +94,6 @@ pkgs.mkShell {
 
     if [ ! -d "./sokol" ]; then
       ln -sfn "${sokolSrc}" ./sokol
-    fi
-
-    if [ ! -d "./portablegl" ]; then
-      ln -sfn ${portablegl} ./portablegl
     fi
 
     if [ -d .git ]; then
