@@ -43,6 +43,11 @@
 #define GPU_PADDED_BODY_W 103
 #define GPU_PADDED_BODY_H 203
 
+#define VRAM_TEX_WIDTH 128
+#define VRAM_TEX_HEIGHT 290
+#define OFFSET_X 24
+#define OFFSET_Y 10
+
 #define TOTAL_HAND_PHASES 60
 #define DEFAULT_FPS 30
 
@@ -76,23 +81,23 @@ typedef struct {
    2. GPU-COMPATIBLE STRUCTS & VERTEX DATA LAYOUTS
    ========================================================================== */
 typedef struct {
-	float pos; // x, y
-	float uv; // u, v
+	float pos[2]; // x, y coordinate attributes array
+	float uv[2]; // u, v mapping boundaries array
 } CatClock_GpuVertex;
 
 /* Unified 176-byte flat uniform block matching std140 layout bounds exactly */
 typedef struct {
-	float tail_uv; // Offset 0:   x, y, w, h
-	float eyes_uv; // Offset 16:  x, y, w, h
-	float hours_uv; // Offset 32:  x, y, w, h
-	float mins_uv; // Offset 48:  x, y, w, h
-	float secs_uv; // Offset 64:  x, y, w, h
-	float cat_color; // Offset 80:  r, g, b, a
-	float tie_color; // Offset 96:  r, g, b, a
-	float pupil_color; // Offset 112: r, g, b, a
-	float sclera_color; // Offset 128: r, g, b, a
-	float detail_color; // Offset 144: r, g, b, a
-	float halo_color; // Offset 160: r, g, b, a -> Separated dilation tint
+	float tail_uv[4]; // Offset 0   (padded to 16 bytes)
+	float eyes_uv[4]; // Offset 16  (padded to 16 bytes)
+	float hours_uv[4]; // Offset 32  (padded to 16 bytes)
+	float mins_uv[4]; // Offset 48  (padded to 16 bytes)
+	float secs_uv[4]; // Offset 64  (padded to 16 bytes)
+	float cat_color[4]; // Offset 80  (16 bytes)
+	float tie_color[4]; // Offset 96  (16 bytes)
+	float pupil_color[4]; // Offset 112 (16 bytes)
+	float sclera_color[4]; // Offset 128 (16 bytes)
+	float detail_color[4]; // Offset 144 (16 bytes)
+	float halo_color[4]; // Offset 160 (16 bytes)
 } CatClock_ShaderUniforms;
 
 /* Cleaned, Sokol-ready framework-agnostic atlas context structure */
@@ -145,11 +150,18 @@ typedef struct {
 
 	/* Dedicated component texture targets */
 	sg_image body_mask_texture;
-	sg_image tail_atlas_texture;
-	sg_image eyes_atlas_texture;
-	sg_image hands_atlas_texture; // Symmetric sheet bound for all 3 hand paths
+	sg_sampler body_mask_sampler;
+	sg_view body_mask_view;
+	//sg_image tail_atlas_texture;
+	//sg_image eyes_atlas_texture;
+	//sg_image hands_atlas_texture;
 	sg_image cat_halo_mmg;
 	sg_image buf_composite_img;
+
+	/* --- MESH GEOMETRY & PIPELINE RESOURCE HANDLES --- */
+	sg_buffer vertex_buffer;
+	sg_buffer index_buffer;
+	sg_pipeline draw_pipeline;
 
 	/* Instanced layout computational states */
 	CatClock_ComputeAtlas hours_atlas;
@@ -209,6 +221,7 @@ void CatClock_DestroyXbmLibrary(struct CatClock_XbmLibrary* lib);
 void CatClock_GetCatbackData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h);
 void CatClock_GetCatwhiteData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h);
 void CatClock_GetCattieBodyData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h);
+void CatClock_GetEyesData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h);
 void CatClock_GetHitboxData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h);
 
 /* Critical XBM Asset Loader & Diagnostic validation sink dumps */
@@ -219,6 +232,10 @@ void CatClock_DebugDumpSingleLayerToDisk(const char* filename, const uint8_t* bu
 void CatClock_DebugDumpPamToDisk(const char* filepath, const uint8_t* material_grid, int w, int h);
 void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* raw_buffer, int w,
 										 int h);
+
+void CatClock_UnpackStaticAssetsToStagingBuffer(uint32_t* dest_rgba_buffer, const uint8_t* catback_bits,
+												const uint8_t* tie_body_bits, const uint8_t* catwhite_bits,
+												const uint8_t* eyes_bits);
 
 /* Command-line and configuration subroutines */
 void PrintHelpDocumentation(const char* program_name);

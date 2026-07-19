@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 /* ==========================================================================
    FOUNDATIONAL ASSET GEOMETRY & COORDINATE BLUEPRINTS
@@ -467,6 +468,13 @@ void CatClock_GetHitboxData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int
 		*h = lib->hitbox_h;
 	}
 }
+void CatClock_GetEyesData(struct CatClock_XbmLibrary* lib, uint8_t** bits, int* w, int* h) {
+	if (lib) {
+		*bits = ctx.clean_eye_mask;
+		*w = lib->eyes_w;
+		*h = lib->eyes_h;
+	}
+}
 void CatClock_DestroyXbmLibrary(struct CatClock_XbmLibrary* lib) {
 	if (!lib)
 		return;
@@ -492,4 +500,80 @@ void Diagnostics_LogScaleBoundaryChange(uint32_t step_value, float derived_multi
 	printf("[Telemetry][Scale Event] Context Transformation Layer Modified: Scale Ratio Half-Steps "
 		   "= %u | Factor Metric = %.2fx\n",
 		   step_value, derived_multiplier);
+}
+
+/**
+ * Unpacks the tightly packed 1-bit static assets into a single unified
+ * 128x290 RGBA8 VRAM staging canvas sheet anchored at offset (24, 10).
+ */
+void CatClock_UnpackStaticAssetsToStagingBuffer(uint32_t* dest_rgba_buffer,
+												const uint8_t* catback_bits,
+												const uint8_t* tie_body_bits,
+												const uint8_t* catwhite_bits,
+												const uint8_t* eyes_bits) {
+	// 1. Reset the entire 128x290 layout space to full transparency
+	memset(dest_rgba_buffer, 0, VRAM_TEX_WIDTH * VRAM_TEX_HEIGHT * sizeof(uint32_t));
+
+	// Stride layout sizing metrics based on independent asset widths
+	int stride_back = (101 + 7) / 8; // ASSET_BODY_W = 101
+	int stride_white = (101 + 7) / 8; // ASSET_BODY_W = 101
+	int stride_tie = (87 + 7) / 8; // CATTIE_WIDTH = 87
+	int stride_eyes = (54 + 7) / 8; // EYES_WIDTH = 54
+
+	// 2. Iterate line-by-line matching the unscaled template canvas space
+	for (int y = 0; y < ASSET_BODY_H; y++) {
+		for (int x = 0; x < ASSET_BODY_W; x++) {
+			uint8_t r_bit = 0; // catback
+			uint8_t g_bit = 0; // tie_body
+			uint8_t b_bit = 0; // catwhite
+			uint8_t a_bit = 0; // eyes
+
+			// Foundational body silhouette (sampled at local 0,0)
+			if (catback_bits) {
+				int idx = (y * stride_back) + (x / 8);
+				r_bit = (catback_bits[idx] >> (x % 8)) & 1;
+			}
+
+			// White fur details overlay (shifted by +1, +6)
+			int wx = x - 1;
+			int wy = y - 6;
+			if (catwhite_bits && wx >= 0 && wx < 101 && wy >= 0 && wy < 201) {
+				int idx = (wy * stride_white) + (wx / 8);
+				b_bit = (catwhite_bits[idx] >> (wx % 8)) & 1;
+			}
+
+			// Necktie body overlay (shifted by +9, +75)
+			int tx = x - 9;
+			int ty = y - 75;
+			if (tie_body_bits && tx >= 0 && tx < 87 && ty >= 0 && ty < 20) {
+				int idx = (ty * stride_tie) + (tx / 8);
+				g_bit = (tie_body_bits[idx] >> (tx % 8)) & 1;
+			}
+
+			// Static eye socket backings (bounded at x:[25..79], y:[20..43])
+			if (eyes_bits && x >= 25 && x < 79 && y >= 20 && y < 43) {
+				int ex = x - 25;
+				int ey = y - 20;
+				int idx = (ey * stride_eyes) + (ex / 8);
+				// Invert bit value if the source data tracks background empty space natively
+				a_bit = ((eyes_bits[idx] >> (ex % 8)) & 1) == 0 ? 1 : 0;
+			}
+
+			// Map binary flags to raw channel intensities
+			uint8_t r_chan = r_bit ? 0xFF : 0x00;
+			uint8_t g_chan = g_bit ? 0xFF : 0x00;
+			uint8_t b_chan = b_bit ? 0xFF : 0x00;
+			uint8_t a_chan = a_bit ? 0xFF : 0x00;
+
+			// Pack channels into a standard Little-Endian 32-bit integer (AABBGGRR)
+			uint32_t packed_pixel = ((uint32_t) a_chan << 24) | ((uint32_t) b_chan << 16)
+				| ((uint32_t) g_chan << 8) | ((uint32_t) r_chan);
+
+			// Compute absolute coordinate index within our VRAM PoT sheet
+			int dest_x = OFFSET_X + x;
+			int dest_y = OFFSET_Y + y;
+
+			dest_rgba_buffer[dest_y * VRAM_TEX_WIDTH + dest_x] = packed_pixel;
+		}
+	}
 }

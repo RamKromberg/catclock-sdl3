@@ -133,6 +133,15 @@ void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* libra
 	free(composition_buffer);
 }
 
+/* Converts standard context palette byte states cleanly to shader-ready normalized floating-point
+ * channels arrays */
+static void CatClock_NormalizeColorToUniform(SDL_Color src, float dest_array[4]) {
+	dest_array[0] = (float) src.r / 255.0f;
+	dest_array[1] = (float) src.g / 255.0f;
+	dest_array[2] = (float) src.b / 255.0f;
+	dest_array[3] = (float) src.a / 255.0f;
+}
+
 int main(int argc, char* argv[]) {
 	printf("[Trace] Starting App Transition Runtime Execution Context.\n");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -143,9 +152,10 @@ int main(int argc, char* argv[]) {
 	/* Setup runtime configurations, custom frame limits, and color tokens */
 	ParseCommandLineArguments(argc, argv, &ctx);
 
-	/* RE-ALIGNED: References the modernized canvas constants from shared header pass */
-	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
-	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 284.0f;
+	/* RE-ALIGNED: Reference full 128x290 VRAM textures layout to stop aspect warping and row
+	 * skewing */
+	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 128.0f;
+	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 290.0f;
 
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int target_w = (int) (baseline_w * scale);
@@ -214,6 +224,178 @@ int main(int argc, char* argv[]) {
 	}
 	printf("[Verification] Entering interactive runtime event processing layout loop...\n");
 
+	/* --- SETUP METRIC ANCHORS --- */
+	float current_scale = (float) ctx.current_half_steps / 2.0f;
+
+	printf("\n[Diagnostic Metrics] === VIEWPORT BOUNDS VERIFICATION ===\n");
+	printf("[Diagnostic Metrics] Initial Legacy Canvas Target Size: %.2f x %.2f px\n", baseline_w,
+		   baseline_h);
+	printf("[Diagnostic Metrics] Hardware Staging VRAM Atlas Canvas: %d x %d px\n", VRAM_TEX_WIDTH,
+		   VRAM_TEX_HEIGHT);
+	printf("[Diagnostic Metrics] Evaluated Vertex Map Max U Coordinate: %.4f\n", 103.0f / 128.0f);
+	printf("[Diagnostic Metrics] Evaluated Vertex Map Max V Coordinate: %.4f\n", 284.0f / 290.0f);
+	printf("[Diagnostic Metrics] Runtime Host Window Pixel Dimension: %d x %d px\n",
+		   (int) (baseline_w * current_scale), (int) (baseline_h * current_scale));
+	printf("[Diagnostic Metrics] =====================================\n\n");
+
+	printf("\n[Diagnostic Audit] === SHADER UNIFORM BLOCK SIZE VERIFICATION ===\n");
+	printf("[Diagnostic Audit] C Struct Layout Footprint (CatClock_ShaderUniforms): %zu bytes\n",
+		   sizeof(CatClock_ShaderUniforms));
+	printf("[Diagnostic Audit] Expected Shader Layout Footprint (cb_params_t):      %zu bytes\n",
+		   sizeof(cb_params_t));
+	printf("[Diagnostic Audit] =================================            =====\n\n");
+
+	/* --- 1. COMMIT GEOMETRY MESHES TO GPU BUFFERS --- */
+	CatClock_GpuVertex clock_vertices[] = {
+		{ .pos = { -1.0f, 1.0f }, .uv = { 0.0f, 0.0f } }, /* Top Left */
+		{ .pos = { 1.0f, 1.0f }, .uv = { 1.0f, 0.0f } }, /* Top Right */
+		{ .pos = { -1.0f, -1.0f }, .uv = { 0.0f, 1.0f } }, /* Bottom Left */
+		{ .pos = { 1.0f, -1.0f }, .uv = { 1.0f, 1.0f } } /* Bottom Right */
+	};
+	uint16_t clock_indices[] = { 0, 1, 2, 3 };
+
+	ctx.vertex_buffer = sg_make_buffer(
+		&(sg_buffer_desc) { .data = { .ptr = clock_vertices, .size = sizeof(clock_vertices) },
+							.label = "ClockMeshVertexBuffer" });
+
+	ctx.index_buffer = sg_make_buffer(
+		&(sg_buffer_desc) { .usage = { .index_buffer = true },
+							.data = { .ptr = clock_indices, .size = sizeof(clock_indices) },
+							.label = "ClockMeshIndexBuffer" });
+
+	/* --- 2. EXTRACT AND UNPACK STATIC ASSET SHARDS --- */
+	uint8_t *catback_ptr = NULL, *tie_ptr = NULL, *catwhite_ptr = NULL, *eyes_ptr = NULL;
+	int dummy_w = 0, dummy_h = 0;
+
+	CatClock_GetCatbackData(runtime_xbm_handle, &catback_ptr, &dummy_w, &dummy_h);
+	CatClock_GetCattieBodyData(runtime_xbm_handle, &tie_ptr, &dummy_w, &dummy_h);
+	CatClock_GetCatwhiteData(runtime_xbm_handle, &catwhite_ptr, &dummy_w, &dummy_h);
+	CatClock_GetEyesData(runtime_xbm_handle, &eyes_ptr, &dummy_w, &dummy_h);
+
+	uint32_t* staging_pixels
+		= (uint32_t*) malloc(VRAM_TEX_WIDTH * VRAM_TEX_HEIGHT * sizeof(uint32_t));
+	if (!staging_pixels) {
+		fprintf(stderr, "[Fatal] Failed to allocate staging VRAM unpack buffer.\n");
+		return 1;
+	}
+
+	CatClock_UnpackStaticAssetsToStagingBuffer(staging_pixels, catback_ptr, tie_ptr, catwhite_ptr,
+											   eyes_ptr);
+
+#ifdef DEBUG_STAGING_PIXELS_DUMP
+	/* --- PERSISTENT PAM SERIALIZATION DISK EXPORTER --- */
+	FILE* audit_dump = fopen("vram_static_staging_dump.pam", "wb");
+	if (audit_dump) {
+		fputs("P7\n", audit_dump);
+		fprintf(audit_dump, "WIDTH %d\n", VRAM_TEX_WIDTH);
+		fprintf(audit_dump, "HEIGHT %d\n", VRAM_TEX_HEIGHT);
+		fputs("DEPTH 4\n", audit_dump);
+		fputs("MAXVAL 255\n", audit_dump);
+		fputs("TUPLTYPE RGB_ALPHA\n", audit_dump);
+		fputs("ENDHDR\n", audit_dump);
+
+		long long r_act = 0, g_act = 0, b_act = 0, a_act = 0;
+		for (int y = 0; y < VRAM_TEX_HEIGHT; y++) {
+			for (int x = 0; x < VRAM_TEX_WIDTH; x++) {
+				uint32_t raw_pixel = staging_pixels[y * VRAM_TEX_WIDTH + x];
+				uint8_t body_mask = raw_pixel & 0xFF;
+				uint8_t tie_mask = (raw_pixel >> 8) & 0xFF;
+				uint8_t white_mask = (raw_pixel >> 16) & 0xFF;
+				uint8_t eyes_mask = (raw_pixel >> 24) & 0xFF;
+
+				if (body_mask > 0)
+					r_act++;
+				if (tie_mask > 0)
+					g_act++;
+				if (white_mask > 0)
+					b_act++;
+				if (eyes_mask > 0)
+					a_act++;
+
+				uint8_t out_pixel[4] = { 40, 40, 40, 0 };
+				if (eyes_mask > 128) {
+					out_pixel[0] = ctx.sclera_color.r;
+					out_pixel[1] = ctx.sclera_color.g;
+					out_pixel[2] = ctx.sclera_color.b;
+					out_pixel[3] = 255;
+				} else if (white_mask > 128) {
+					out_pixel[0] = ctx.detail_color.r;
+					out_pixel[1] = ctx.detail_color.g;
+					out_pixel[2] = ctx.detail_color.b;
+					out_pixel[3] = 255;
+				} else if (tie_mask > 128) {
+					out_pixel[0] = ctx.tie_color.r;
+					out_pixel[1] = ctx.tie_color.g;
+					out_pixel[2] = ctx.tie_color.b;
+					out_pixel[3] = 255;
+				} else if (body_mask > 128) {
+					out_pixel[0] = ctx.cat_color.r;
+					out_pixel[1] = ctx.cat_color.g;
+					out_pixel[2] = ctx.cat_color.b;
+					out_pixel[3] = 255;
+				}
+				fwrite(out_pixel, 1, 4, audit_dump);
+			}
+		}
+		fclose(audit_dump);
+		printf("[Pixel Integrity Audit] DETECTED MASK CHANNEL DENSITY REPORT:\n");
+		printf("  -> R Channel (Body Nodes) Count   : %lld\n", r_act);
+		printf("  -> G Channel (Necktie Nodes) Count: %lld\n", g_act);
+		printf("  -> B Channel (White Nodes) Count  : %lld\n", b_act);
+		printf("  -> A Channel (Eyes Sockets) Count : %lld\n", a_act);
+	}
+#endif
+
+	/* --- 3. UPLOAD STATIC TEXTURES TO GPU VRAM --- */
+	ctx.body_mask_texture = sg_make_image(&(sg_image_desc) {
+		.width = VRAM_TEX_WIDTH,
+		.height = VRAM_TEX_HEIGHT,
+		.pixel_format = SG_PIXELFORMAT_RGBA8,
+		.data
+		= { .mip_levels[0] = { .ptr = staging_pixels,
+							   .size = VRAM_TEX_WIDTH * VRAM_TEX_HEIGHT * sizeof(uint32_t) } },
+		.label = "CatBodyMaskTexture" });
+
+	ctx.body_mask_sampler = sg_make_sampler(&(sg_sampler_desc) { .min_filter = SG_FILTER_NEAREST,
+																 .mag_filter = SG_FILTER_NEAREST,
+																 .wrap_u = SG_WRAP_CLAMP_TO_EDGE,
+																 .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
+																 .label = "CatBodyMaskSampler" });
+
+	ctx.body_mask_view = sg_make_view(&(sg_view_desc) {
+		.texture = { .image = ctx.body_mask_texture }, .label = "CatBodyMaskResourceView" });
+
+	free(staging_pixels);
+	printf("[VRAM Init] Static image buffer assets and samplers committed to GPU context.\n");
+
+	/* --- 4. COMPILE GRAPHICS CONTEXT DRAW PIPELINE --- */
+	sg_pipeline_desc pip_desc
+		= { .shader = sg_make_shader(catclock_shader_desc(sg_query_backend())),
+			.primitive_type = SG_PRIMITIVETYPE_TRIANGLE_STRIP,
+			.index_type = SG_INDEXTYPE_UINT16,
+			.label = "ClockMainRenderingPipeline" };
+	pip_desc.layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2;
+	pip_desc.layout.attrs[1].format = SG_VERTEXFORMAT_FLOAT2;
+	pip_desc.colors[0]
+		= (sg_color_target_state) { .pixel_format = SG_PIXELFORMAT_RGBA8,
+									.blend
+									= { .enabled = true,
+										.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA,
+										.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+										.op_rgb = SG_BLENDOP_ADD,
+										.src_factor_alpha = SG_BLENDFACTOR_ONE,
+										.dst_factor_alpha = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+										.op_alpha = SG_BLENDOP_ADD } };
+
+	ctx.draw_pipeline = sg_make_pipeline(&pip_desc);
+
+	if (sg_query_pipeline_state(ctx.draw_pipeline) != SG_RESOURCESTATE_VALID) {
+		fprintf(stderr, "[Fatal Error] GFX state pipeline compilation pass failed.\n");
+		return 1;
+	}
+	printf("[Pipeline Init] Sokol drawing state maps compiled successfully.\n");
+
+	/* --- 5. INITIALIZE ATLAS CONFIGURATIONS AND PRE-BAKE --- */
 	struct {
 		int type;
 		SDL_Color color;
@@ -228,134 +410,181 @@ int main(int argc, char* argv[]) {
 	} sec_cfg = { HAND_TYPE_SECOND, ctx.second_color };
 	CatClock_TailShaderArgs tail_data = { 0.0f, 0.0f, false };
 
-	/* Force baseline allocation synchronization trace on initialization */
-	ctx.texture_cache_stale = true;
+	CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+								CatClock_ShaderHands, &hour_cfg);
+	CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+								CatClock_ShaderHands, &min_cfg);
+	CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+								CatClock_ShaderHands, &sec_cfg);
+	CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
+								CatClock_ShaderEyes, NULL);
+	CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
+								CatClock_ShaderTail, &tail_data);
 
+#ifdef DEBUG_DUMP
+	if (runtime_xbm_handle) {
+		Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+		printf("[Trace] Dynamic textures cached and committed to disk files.\n");
+	}
+#endif
+
+	ctx.texture_cache_stale = false;
+
+	// =========================================================================
+	// PURE EVENT-DRIVEN CORE (Zero-Timer GPU Offloader Architecture)
+	// =========================================================================
 	bool running = true;
 	SDL_Event event;
 
+	// Initial render generation request flag to draw the widget when spawned
+	bool force_redraw = true;
+
 	while (running) {
-		while (SDL_PollEvent(&event)) {
-			if (event.type == SDL_EVENT_QUIT) {
-				running = false;
-			}
-			/* Capture keyboard step tracking scale transformations */
-			else if (event.type == SDL_EVENT_KEY_DOWN) {
-				/* Immediate termination check via Escape shortcut key pattern */
-				if (event.key.key == SDLK_ESCAPE) {
+		/* CRITICAL OPTIMIZATION: Thread sleeps indefinitely inside the kernel.
+		   It consumes 0.0% CPU and wakes ONLY when a hardware event is posted. */
+		if (SDL_WaitEvent(&event)) {
+			do {
+				if (event.type == SDL_EVENT_QUIT) {
 					running = false;
-					break;
+				} else if (event.type == SDL_EVENT_KEY_DOWN) {
+					if (event.key.key == SDLK_ESCAPE) {
+						running = false;
+						break;
+					}
+					uint32_t old_steps = ctx.current_half_steps;
+					if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+						if (ctx.current_half_steps < 20)
+							ctx.current_half_steps++;
+					} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+						if (ctx.current_half_steps > 1)
+							ctx.current_half_steps--;
+					}
+					if (ctx.current_half_steps != old_steps) {
+						ctx.texture_cache_stale = true;
+						float updated_scale = (float) ctx.current_half_steps / 2.0f;
+						SDL_SetWindowSize(ctx.window, (int) (baseline_w * updated_scale),
+										  (int) (baseline_h * updated_scale));
+						force_redraw = true;
+					}
+				} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+					uint32_t old_steps = ctx.current_half_steps;
+					if (event.wheel.y > 0.0f) {
+						if (ctx.current_half_steps < 20)
+							ctx.current_half_steps++;
+					} else if (event.wheel.y < 0.0f) {
+						if (ctx.current_half_steps > 1)
+							ctx.current_half_steps--;
+					}
+					if (ctx.current_half_steps != old_steps) {
+						ctx.texture_cache_stale = true;
+						float updated_scale = (float) ctx.current_half_steps / 2.0f;
+						SDL_SetWindowSize(ctx.window, (int) (baseline_w * updated_scale),
+										  (int) (baseline_h * updated_scale));
+						force_redraw = true;
+					}
+				} else if (event.type == SDL_EVENT_WINDOW_EXPOSED
+						   || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+					// Handle OS presentation exposure updates cleanly
+					force_redraw = true;
 				}
-
-				uint32_t old_steps = ctx.current_half_steps;
-				if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
-					if (ctx.current_half_steps < 20)
-						ctx.current_half_steps++;
-				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
-					if (ctx.current_half_steps > 1)
-						ctx.current_half_steps--;
-				}
-
-				if (ctx.current_half_steps != old_steps) {
-					ctx.texture_cache_stale = true;
-					Diagnostics_LogScaleBoundaryChange(ctx.current_half_steps,
-													   ((float) ctx.current_half_steps / 2.0f));
-
-					/* Explicitly resize the desktop window framework to match integer scale factors
-					 */
-					float updated_scale = (float) ctx.current_half_steps / 2.0f;
-					int next_w = (int) (baseline_w * updated_scale);
-					int next_h = (int) (baseline_h * updated_scale);
-					SDL_SetWindowSize(ctx.window, next_w, next_h);
-				}
-			}
-			/* Capture continuous mouse wheel scale modifications */
-			else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-				uint32_t old_steps = ctx.current_half_steps;
-				if (event.wheel.y > 0.0f) {
-					if (ctx.current_half_steps < 20)
-						ctx.current_half_steps++;
-				} else if (event.wheel.y < 0.0f) {
-					if (ctx.current_half_steps > 1)
-						ctx.current_half_steps--;
-				}
-
-				if (ctx.current_half_steps != old_steps) {
-					ctx.texture_cache_stale = true;
-					Diagnostics_LogScaleBoundaryChange(ctx.current_half_steps,
-													   ((float) ctx.current_half_steps / 2.0f));
-
-					float updated_scale = (float) ctx.current_half_steps / 2.0f;
-					int next_w = (int) (baseline_w * updated_scale);
-					int next_h = (int) (baseline_h * updated_scale);
-					SDL_SetWindowSize(ctx.window, next_w, next_h);
-				}
-			}
+			} while (SDL_PollEvent(&event));
 		}
 
-		/* Regenerate asset textures on the CPU only when cache check state flags shift */
-		if (ctx.texture_cache_stale) {
-			CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-										CatClock_ShaderHands, &hour_cfg);
-			CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-										CatClock_ShaderHands, &min_cfg);
-			CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-										CatClock_ShaderHands, &sec_cfg);
-			CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
-										CatClock_ShaderEyes, NULL); // Fixed to ctx.target_fps
-			CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
-										CatClock_ShaderTail, &tail_data);
+		/* Execute drawing mutations *exclusively* if a scaling bounds condition modified state */
+		if (force_redraw) {
+			force_redraw = false;
 
-			// TODO 1: Load static layout assets to VRAM.
-			// TODO 1.1: Write shader to display the layout.
-			// TODO 2: Load dynamic atlas assets to VRAM.
-			// TODO 2.1: Shuffle the atlas.
+			if (ctx.texture_cache_stale) {
+				// Re-bake atlas shapes down to match the new crisp matrix scaling rules
+				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+											CatClock_ShaderHands, &hour_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+											CatClock_ShaderHands, &min_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
+											CatClock_ShaderHands, &sec_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
+											CatClock_ShaderEyes, NULL);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
+											CatClock_ShaderTail, &tail_data);
 #ifdef DEBUG_DUMP
-			Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
-			printf("[Trace] Dynamic textures cached and committed to disk files at half-step: %u\n",
-				   ctx.current_half_steps);
+				Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+				printf("[Trace] Dynamic textures cached and committed to disk files.\n");
 #endif
-			ctx.texture_cache_stale = false;
+				ctx.texture_cache_stale = false;
+			}
+
+			CatClock_ShaderUniforms shader_uniform_payload = { 0 };
+			CatClock_NormalizeColorToUniform(ctx.cat_color, shader_uniform_payload.cat_color);
+			CatClock_NormalizeColorToUniform(ctx.tie_color, shader_uniform_payload.tie_color);
+			CatClock_NormalizeColorToUniform(ctx.pupil_color, shader_uniform_payload.pupil_color);
+			CatClock_NormalizeColorToUniform(ctx.sclera_color, shader_uniform_payload.sclera_color);
+			CatClock_NormalizeColorToUniform(ctx.detail_color, shader_uniform_payload.detail_color);
+
+			SDL_Color white_fallback = { 255, 255, 255, 255 };
+			CatClock_NormalizeColorToUniform(white_fallback, shader_uniform_payload.halo_color);
+
+			int current_viewport_w = 0, current_viewport_h = 0;
+			SDL_GetWindowSize(ctx.window, &current_viewport_w, &current_viewport_h);
+
+			sg_pass_action clock_pass_clear_action = { 0 };
+			clock_pass_clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
+			clock_pass_clear_action.colors[0].clear_value = (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
+
+			sg_begin_pass(&(sg_pass) {
+				.action = clock_pass_clear_action,
+				.swapchain = { .width = current_viewport_w, .height = current_viewport_h } });
+
+			sg_apply_pipeline(ctx.draw_pipeline);
+
+			sg_bindings clock_resource_bindings = { 0 };
+			clock_resource_bindings.vertex_buffers[0] = ctx.vertex_buffer;
+			clock_resource_bindings.index_buffer = ctx.index_buffer;
+			clock_resource_bindings.views[0] = ctx.body_mask_view;
+			clock_resource_bindings.samplers[0] = ctx.body_mask_sampler;
+
+			sg_apply_bindings(&clock_resource_bindings);
+			sg_apply_uniforms(UB_cb_params, &SG_RANGE(shader_uniform_payload));
+
+			sg_draw(0, 4, 1);
+			sg_end_pass();
+			sg_commit();
+
+			SDL_GL_SwapWindow(ctx.window);
 		}
-
-		/* Placeholder Graphics Render Pass: Clear the window using the context background token */
-		glClearColor((float) ctx.window_bg_color.r / 255.0f, (float) ctx.window_bg_color.g / 255.0f,
-					 (float) ctx.window_bg_color.b / 255.0f,
-					 (float) ctx.window_bg_color.a / 255.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
-		SDL_GL_SwapWindow(ctx.window);
-
-		/* Standard execution logging step tracking loop metrics */
-#ifdef DEBUG_TELEMETRY_SHUFFLE
-		time_t raw_now = time(NULL);
-		struct tm* t_struct = localtime(&raw_now);
-		Diagnostics_LogShufflerIndex("Needle_Hour", (t_struct->tm_hour % 12), TOTAL_HAND_PHASES);
-		Diagnostics_LogShufflerIndex("Needle_Minute", t_struct->tm_min, TOTAL_HAND_PHASES);
-		Diagnostics_LogShufflerIndex("Needle_Second", t_struct->tm_sec, TOTAL_HAND_PHASES);
-		Diagnostics_LogShufflerIndex("Appendage_Tail",
-									 (int) (ctx.current_frame_step % (ctx.target_fps * 2)),
-									 (ctx.target_fps * 2));
-#endif
-
-		SDL_Delay(1000 / ctx.target_fps);
-		ctx.current_frame_step++;
 	}
 
 #ifdef DEBUG_DUMP
 	printf("[Trace] Validation pass finished. Component layout extraction complete.\n");
 #endif
 
-	/* Release computing resources clean before teardown exit */
 	CatClock_DestroyComputeAtlas(&ctx.hours_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.minutes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.seconds_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.eyes_atlas);
 	CatClock_DestroyComputeAtlas(&ctx.tail_atlas);
 
-	/* RE-ALIGNED: Free resources clean via local stack container */
 	if (runtime_xbm_handle) {
 		CatClock_DestroyXbmLibrary(runtime_xbm_handle);
 		runtime_xbm_handle = NULL;
+	}
+
+	if (sg_query_pipeline_state(ctx.draw_pipeline) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_pipeline(ctx.draw_pipeline);
+	}
+	if (sg_query_buffer_state(ctx.vertex_buffer) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_buffer(ctx.vertex_buffer);
+	}
+	if (sg_query_buffer_state(ctx.index_buffer) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_buffer(ctx.index_buffer);
+	}
+	if (sg_query_image_state(ctx.body_mask_texture) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_image(ctx.body_mask_texture);
+	}
+	if (sg_query_sampler_state(ctx.body_mask_sampler) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_sampler(ctx.body_mask_sampler);
+	}
+	if (sg_query_view_state(ctx.body_mask_view) == SG_RESOURCESTATE_VALID) {
+		sg_destroy_view(ctx.body_mask_view);
 	}
 
 	sg_shutdown();
