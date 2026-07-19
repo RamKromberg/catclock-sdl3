@@ -101,6 +101,9 @@ static inline int32_t SymmetricCrossRound(float base_coord, float displacement, 
    EXTRACTED REFERENCE GEOMETRY PIPELINE
    ========================================================================= */
 
+// ============================================================================
+// DUAL-PHASE SYMMETRIC HAND GEOMETRY COMPOTATION ENGINE
+// ============================================================================
 /**
  * Computes pixel-perfect reference vertices for a specified hand type and phase at 1x resolution.
  * This completely isolates structural lookup coordinates from scaling artifacts or context
@@ -110,9 +113,9 @@ void CatClock_ComputeReferenceHandVertices(int cell_x, int cell_y, int hand_type
 										   gl_Vertex out_vertices[3]) {
 	int phase = phase_idx % TOTAL_HAND_PHASES;
 
-	/* Structural Constants Initialization matching unscaled 1x reference dimensions */
+	// Structural Constants matching unscaled 1x reference dimensions
 	float back_pivot_length = 7.0f;
-	float length_multiplier = 1.000f;
+	float length_multiplier = 1.0f;
 	float base_width = 3.0f;
 
 	if (hand_type == HAND_TYPE_HOUR) {
@@ -127,38 +130,47 @@ void CatClock_ComputeReferenceHandVertices(int cell_x, int cell_y, int hand_type
 
 	gl_Vec2 pivot = CalculateBaselinePivot(cell_x, cell_y);
 
-	/* 1. Forward tip target lookup translation */
+	// 1. Forward tip target lookup translation (Vertex 0 stays anchored as tip)
 	float target_dx = (float) HAND_MASTER_OFFSETS[phase].dx * length_multiplier;
 	float target_dy = (float) HAND_MASTER_OFFSETS[phase].dy * length_multiplier;
 
 	out_vertices[0].x = (int32_t) pivot.x + CleanPixelRound(target_dx);
 	out_vertices[0].y = (int32_t) pivot.y + CleanPixelRound(target_dy);
 
-	/* 2. Tail baseline target lookup (Offset by half phase sequence, 30 steps) */
+	// 2. Compute the exact rear center coordinate profile
 	int tail_phase = (phase + 30) % TOTAL_HAND_PHASES;
 	float tail_dx = (float) HAND_MASTER_OFFSETS[tail_phase].dx * length_multiplier;
 	float tail_dy = (float) HAND_MASTER_OFFSETS[tail_phase].dy * length_multiplier;
 
-	/* Anchor tail vector boundary limits cleanly around master bounding space max of 39px */
 	float base_center_xf = pivot.x + (tail_dx * (back_pivot_length / 39.0f));
 	float base_center_yf = pivot.y + (tail_dy * (back_pivot_length / 39.0f));
 
-	/* 3. Pure cross-product table perpendicular lookup array index shift (-15 steps) */
-	int perp_phase = (phase + TOTAL_HAND_PHASES - 15) % TOTAL_HAND_PHASES;
-	float perp_dx = (float) HAND_MASTER_OFFSETS[perp_phase].dx;
-	float perp_dy = (float) HAND_MASTER_OFFSETS[perp_phase].dy;
+	// 3. ISOLATE DUAL OPPOSING PERPENDICULAR PHASES (+15 AND -15)
+	int left_perp_phase = (phase + TOTAL_HAND_PHASES - 15) % TOTAL_HAND_PHASES;
+	int right_perp_phase = (phase + 15) % TOTAL_HAND_PHASES;
 
-	/* Extrude width lines symmetrically using matrix ratios */
+	// Fetch separate directional trajectories straight from the grid matrix
+	float left_perp_dx = (float) HAND_MASTER_OFFSETS[left_perp_phase].dx;
+	float left_perp_dy = (float) HAND_MASTER_OFFSETS[left_perp_phase].dy;
+
+	float right_perp_dx = (float) HAND_MASTER_OFFSETS[right_perp_phase].dx;
+	float right_perp_dy = (float) HAND_MASTER_OFFSETS[right_perp_phase].dy;
+
+	// Scale outward symmetrically relative to the base center node
 	float half_base_width = base_width * 0.5f;
-	float rel_left_x = perp_dx * (half_base_width / 39.0f);
-	float rel_left_y = perp_dy * (half_base_width / 39.0f);
 
-	/* 4. Final target vertex mapping ensuring crisp alignment rules are kept intact */
-	out_vertices[1].x = SymmetricCrossRound(base_center_xf, rel_left_x, perp_dx);
-	out_vertices[1].y = SymmetricCrossRound(base_center_yf, rel_left_y, perp_dy);
+	float rel_left_x = left_perp_dx * (half_base_width / 39.0f);
+	float rel_left_y = left_perp_dy * (half_base_width / 39.0f);
 
-	out_vertices[2].x = SymmetricCrossRound(base_center_xf, -rel_left_x, -perp_dx);
-	out_vertices[2].y = SymmetricCrossRound(base_center_yf, -rel_left_y, -perp_dy);
+	float rel_right_x = right_perp_dx * (half_base_width / 39.0f);
+	float rel_right_y = right_perp_dy * (half_base_width / 39.0f);
+
+	// 4. Map final vertex bounds ensuring opposing forces balance layout distortion
+	out_vertices[1].x = SymmetricCrossRound(base_center_xf, rel_left_x, left_perp_dx);
+	out_vertices[1].y = SymmetricCrossRound(base_center_yf, rel_left_y, left_perp_dy);
+
+	out_vertices[2].x = SymmetricCrossRound(base_center_xf, rel_right_x, right_perp_dx);
+	out_vertices[2].y = SymmetricCrossRound(base_center_yf, rel_right_y, right_perp_dy);
 }
 
 /**

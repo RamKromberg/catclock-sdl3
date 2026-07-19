@@ -136,29 +136,30 @@ void CatClock_DebugDumpGenericAtlasToPam(const char* filepath, const uint8_t* ra
 		uint8_t token = raw_buffer[i];
 		uint8_t r = 0, g = 0, b = 0, a = 255;
 
+		// Map tokens directly to their true visual color representations on disk
 		if (token == PALETTE_CAT_WHITE || token == PALETTE_HALO) {
 			r = 255;
 			g = 255;
-			b = 255;
+			b = 255; // White details
 		} else if (token == PALETTE_NECKTIE || token == PALETTE_HAND_SECOND) {
 			r = 255;
 			g = 0;
-			b = 0;
+			b = 0; // Red accents / Sweeping seconds hand
 		} else if (token == PALETTE_CAT_BODY || token == PALETTE_HAND_HOUR
 				   || token == PALETTE_HAND_MINUTE) {
-			r = 0;
-			g = 0;
-			b = 0;
+			r = 40;
+			g = 40;
+			b = 40; // Dark silhouettes / Kinematic hands
 		} else if (token == PALETTE_PUPIL) {
 			r = 0;
 			g = 255;
-			b = 0;
+			b = 0; // Green tracking pupils
 		} else if (token == PALETTE_SCLERA) {
 			r = 255;
 			g = 255;
-			b = 0;
+			b = 0; // Yellow eye backing sockets
 		} else {
-			a = 0;
+			a = 0; // PALETTE_TRANSPARENT: Mark empty space as invisible alpha
 		}
 		fputc(r, f);
 		fputc(g, f);

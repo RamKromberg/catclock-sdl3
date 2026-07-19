@@ -46,7 +46,7 @@
 #define VRAM_TEX_WIDTH 128
 #define VRAM_TEX_HEIGHT 290
 #define OFFSET_X 24
-#define OFFSET_Y 10
+#define OFFSET_Y 1
 
 #define TOTAL_HAND_PHASES 60
 #define DEFAULT_FPS 30
@@ -85,19 +85,23 @@ typedef struct {
 	float uv[2]; // u, v mapping boundaries array
 } CatClock_GpuVertex;
 
-/* Unified 176-byte flat uniform block matching std140 layout bounds exactly */
 typedef struct {
-	float tail_uv[4]; // Offset 0   (padded to 16 bytes)
-	float eyes_uv[4]; // Offset 16  (padded to 16 bytes)
-	float hours_uv[4]; // Offset 32  (padded to 16 bytes)
-	float mins_uv[4]; // Offset 48  (padded to 16 bytes)
-	float secs_uv[4]; // Offset 64  (padded to 16 bytes)
-	float cat_color[4]; // Offset 80  (16 bytes)
-	float tie_color[4]; // Offset 96  (16 bytes)
-	float pupil_color[4]; // Offset 112 (16 bytes)
-	float sclera_color[4]; // Offset 128 (16 bytes)
-	float detail_color[4]; // Offset 144 (16 bytes)
-	float halo_color[4]; // Offset 160 (16 bytes)
+	// Exactly 16 bytes total - Perfectly aligned to a single GPU register slot
+	int32_t hour_frame_idx;
+	int32_t min_frame_idx;
+	int32_t sec_frame_idx;
+	int32_t pendulum_frame_idx;
+
+	// Remaining color properties (each natively occupying a 16-byte vec4 layout slot)
+	float cat_color[4];
+	float tie_color[4];
+	float pupil_color[4];
+	float sclera_color[4];
+	float detail_color[4];
+	float halo_color[4];
+	float hour_color[4];
+	float minute_color[4];
+	float second_color[4];
 } CatClock_ShaderUniforms;
 
 /* Cleaned, Sokol-ready framework-agnostic atlas context structure */

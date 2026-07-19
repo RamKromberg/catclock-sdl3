@@ -127,7 +127,7 @@ echo ""
 echo "Drop $output_pdf into Gemini and use the following prompt:"
 echo "--------------------------------------------------------"
 cat << EOF
-## 🛠️ Stage 0: 📥 Repository Analysis Protocol
+## 📥 Repository Analysis Protocol
 Read and parse the contents of the attached catclock_repository_dump.pdf.
 ## Execution Instructions:
 

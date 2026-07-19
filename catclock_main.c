@@ -142,6 +142,82 @@ static void CatClock_NormalizeColorToUniform(SDL_Color src, float dest_array[4])
 	dest_array[3] = (float) src.a / 255.0f;
 }
 
+// File-scoped persistent texture handles isolating Sokol state away from the atlas engine
+static sg_image hours_atlas_image_slot = { 0 };
+static sg_image minutes_atlas_image_slot = { 0 };
+static sg_image seconds_atlas_image_slot = { 0 };
+static sg_image eyes_atlas_image_slot = { 0 };
+static sg_image tail_atlas_image_slot = { 0 };
+
+// REQUIREMENT STEP: Persistent view objects matching the pipeline binds array type requirements
+static sg_view hours_atlas_view_slot = { 0 };
+static sg_view minutes_atlas_view_slot = { 0 };
+static sg_view seconds_atlas_view_slot = { 0 };
+static sg_view eyes_atlas_view_slot = { 0 };
+static sg_view tail_atlas_view_slot = { 0 };
+
+void CatClock_BakeAtlasToVram(sg_image* target_vram_slot, sg_view* target_view_slot,
+							  const uint8_t* raw_index_grid, int width, int height,
+							  const char* label) {
+	if (!raw_index_grid || width <= 0 || height <= 0)
+		return;
+
+	// 1. Clear any prior image and view allocations when a scale mutation occurs
+	if (target_view_slot->id != SG_INVALID_ID) {
+		if (sg_query_view_state(*target_view_slot) == SG_RESOURCESTATE_VALID) {
+			sg_destroy_view(*target_view_slot);
+		}
+		target_view_slot->id = SG_INVALID_ID;
+	}
+	if (target_vram_slot->id != SG_INVALID_ID) {
+		if (sg_query_image_state(*target_vram_slot) == SG_RESOURCESTATE_VALID) {
+			sg_destroy_image(*target_vram_slot);
+		}
+		target_vram_slot->id = SG_INVALID_ID;
+	}
+
+	// 2. Build the uncompressed template sheet descriptor bounds
+	sg_image_desc texture_blueprint
+		= { .width = width,
+			.height = height,
+			.pixel_format = SG_PIXELFORMAT_R8,
+			.data = { .mip_levels = { { .ptr = raw_index_grid,
+										.size = (size_t) (width * height * sizeof(uint8_t)) } } },
+			.label = label };
+
+	// 3. Instantiate the image object allocation handle
+	*target_vram_slot = sg_make_image(&texture_blueprint);
+
+	// 4. REQUIREMENT STEP: Wrap the image handle safely inside an sg_view container matching page
+	// 19 semantics
+	if (sg_query_image_state(*target_vram_slot) == SG_RESOURCESTATE_VALID) {
+		*target_view_slot = sg_make_view(
+			&(sg_view_desc) { .texture = { .image = *target_vram_slot }, .label = label });
+	}
+}
+
+// Dynamic layout packing helper ensuring sub-atlas bounds match scaled host footprints
+void PackHandUvExtents(float* target_uv_array, int frame_index,
+					   const CatClock_ComputeAtlas* atlas) {
+	if (!atlas || !target_uv_array)
+		return;
+
+	int cols = 10; // Forced matrix column profile inside catclock_atlas.c [0.7]
+	int col = frame_index % cols;
+	int row = frame_index / cols;
+
+	float c_w = (float) atlas->cell_w;
+	float c_h = (float) atlas->cell_h;
+	float a_w = (float) atlas->atlas_w;
+	float a_h = (float) atlas->atlas_h;
+
+	// Normalize coordinates smoothly to [0.0 - 1.0] texture space bounds
+	target_uv_array[0] = (col * c_w) / a_w;
+	target_uv_array[1] = (row * c_h) / a_h;
+	target_uv_array[2] = ((col + 1) * c_w) / a_w;
+	target_uv_array[3] = ((row + 1) * c_h) / a_h;
+}
+
 int main(int argc, char* argv[]) {
 	printf("[Trace] Starting App Transition Runtime Execution Context.\n");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -152,17 +228,25 @@ int main(int argc, char* argv[]) {
 	/* Setup runtime configurations, custom frame limits, and color tokens */
 	ParseCommandLineArguments(argc, argv, &ctx);
 
-	/* RE-ALIGNED: Reference full 128x290 VRAM textures layout to stop aspect warping and row
-	 * skewing */
-	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 128.0f;
-	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 290.0f;
+// =========================================================================
+// COMPOSITOR DIRECT SURFACE ATTACHMENT HINTS (ZERO-HOST OVERHEAD)
+// =========================================================================
+// We disable host-side frame requests and let the compositor pull directly
+// from the active VRAM context without forcing main loop thread cycles.
+#if defined(__linux__) && !defined(__ANDROID__)
+	SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
+	SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+#endif
+
+	/* RE-ALIGNED: Strictly capture unpadded asset bounds down to y-index 288 for tail clearance */
+	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
+	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 288.0f;
 
 	float scale = (float) ctx.current_half_steps / 2.0f;
-	int target_w = (int) (baseline_w * scale);
-	int target_h = (int) (baseline_h * scale);
+	int target_w = (int) lroundf(baseline_w * scale);
+	int target_h = (int) lroundf(baseline_h * scale);
 
 	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL;
-
 	if (!ctx.use_decorations) {
 		window_flags |= (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT);
 	}
@@ -172,6 +256,7 @@ int main(int argc, char* argv[]) {
 
 	printf("[Trace] Spawning System Widget Context at Dimensions: %dx%d\n", target_w, target_h);
 	ctx.window = SDL_CreateWindow("CatClock-SDL3 Widget Core", target_w, target_h, window_flags);
+
 	if (!ctx.window) {
 		fprintf(stderr, "[Fatal Error] Host Window abstraction layer failed to map.\n");
 		SDL_Quit();
@@ -410,110 +495,200 @@ int main(int argc, char* argv[]) {
 	} sec_cfg = { HAND_TYPE_SECOND, ctx.second_color };
 	CatClock_TailShaderArgs tail_data = { 0.0f, 0.0f, false };
 
+	ctx.texture_cache_stale = true;
+
 	CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 								CatClock_ShaderHands, &hour_cfg);
 	CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 								CatClock_ShaderHands, &min_cfg);
 	CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 								CatClock_ShaderHands, &sec_cfg);
-	CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
+	CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, (ctx.target_fps * 2), 10,
 								CatClock_ShaderEyes, NULL);
 	CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
 								CatClock_ShaderTail, &tail_data);
 
 #ifdef DEBUG_DUMP
-	if (runtime_xbm_handle) {
-		Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
-		printf("[Trace] Dynamic textures cached and committed to disk files.\n");
-	}
+	Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
+	printf("[Trace] Dynamic textures cached and committed to disk files.\n");
 #endif
+
+	CatClock_BakeAtlasToVram(&hours_atlas_image_slot, &hours_atlas_view_slot,
+							 ctx.hours_atlas.index_buffer, ctx.hours_atlas.atlas_w,
+							 ctx.hours_atlas.atlas_h, "CatClock-HoursHands-Atlas");
+	CatClock_BakeAtlasToVram(&minutes_atlas_image_slot, &minutes_atlas_view_slot,
+							 ctx.minutes_atlas.index_buffer, ctx.minutes_atlas.atlas_w,
+							 ctx.minutes_atlas.atlas_h, "CatClock-MinutesHands-Atlas");
+	CatClock_BakeAtlasToVram(&seconds_atlas_image_slot, &seconds_atlas_view_slot,
+							 ctx.seconds_atlas.index_buffer, ctx.seconds_atlas.atlas_w,
+							 ctx.seconds_atlas.atlas_h, "CatClock-SecondsHands-Atlas");
+	CatClock_BakeAtlasToVram(&eyes_atlas_image_slot, &eyes_atlas_view_slot,
+							 ctx.eyes_atlas.index_buffer, ctx.eyes_atlas.atlas_w,
+							 ctx.eyes_atlas.atlas_h, "CatClock-DynamicEyes-Atlas");
+	CatClock_BakeAtlasToVram(&tail_atlas_image_slot, &tail_atlas_view_slot,
+							 ctx.tail_atlas.index_buffer, ctx.tail_atlas.atlas_w,
+							 ctx.tail_atlas.atlas_h, "CatClock-DynamicTail-Atlas");
 
 	ctx.texture_cache_stale = false;
 
 	// =========================================================================
 	// PURE EVENT-DRIVEN CORE (Zero-Timer GPU Offloader Architecture)
 	// =========================================================================
+	/* === RESTORED RUNTIME TARGET BOUNDS === */
 	bool running = true;
 	SDL_Event event;
 
-	// Initial render generation request flag to draw the widget when spawned
+	// Calculate target frame delay duration in milliseconds
+	int target_fps = (ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps;
+	Uint64 frame_delay_ms = 1000 / target_fps;
+
+	Uint64 last_frame_time = SDL_GetTicks();
 	bool force_redraw = true;
 
+	printf("[Runtime Pacing] Main evaluation engine started. Target FPS: %d\n", target_fps);
+
 	while (running) {
-		/* CRITICAL OPTIMIZATION: Thread sleeps indefinitely inside the kernel.
-		   It consumes 0.0% CPU and wakes ONLY when a hardware event is posted. */
-		if (SDL_WaitEvent(&event)) {
-			do {
-				if (event.type == SDL_EVENT_QUIT) {
+		Uint64 frame_start_ticks = SDL_GetTicks();
+
+		/* 1. ASYNC NON-BLOCKING EVENT PUMP INTERFACE */
+		while (SDL_PollEvent(&event)) {
+			if (event.type == SDL_EVENT_QUIT) {
+				running = false;
+			} else if (event.type == SDL_EVENT_KEY_DOWN) {
+				if (event.key.key == SDLK_ESCAPE) {
 					running = false;
-				} else if (event.type == SDL_EVENT_KEY_DOWN) {
-					if (event.key.key == SDLK_ESCAPE) {
-						running = false;
-						break;
-					}
-					uint32_t old_steps = ctx.current_half_steps;
-					if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
-						if (ctx.current_half_steps < 20)
-							ctx.current_half_steps++;
-					} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
-						if (ctx.current_half_steps > 1)
-							ctx.current_half_steps--;
-					}
-					if (ctx.current_half_steps != old_steps) {
-						ctx.texture_cache_stale = true;
-						float updated_scale = (float) ctx.current_half_steps / 2.0f;
-						SDL_SetWindowSize(ctx.window, (int) (baseline_w * updated_scale),
-										  (int) (baseline_h * updated_scale));
-						force_redraw = true;
-					}
-				} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-					uint32_t old_steps = ctx.current_half_steps;
-					if (event.wheel.y > 0.0f) {
-						if (ctx.current_half_steps < 20)
-							ctx.current_half_steps++;
-					} else if (event.wheel.y < 0.0f) {
-						if (ctx.current_half_steps > 1)
-							ctx.current_half_steps--;
-					}
-					if (ctx.current_half_steps != old_steps) {
-						ctx.texture_cache_stale = true;
-						float updated_scale = (float) ctx.current_half_steps / 2.0f;
-						SDL_SetWindowSize(ctx.window, (int) (baseline_w * updated_scale),
-										  (int) (baseline_h * updated_scale));
-						force_redraw = true;
-					}
-				} else if (event.type == SDL_EVENT_WINDOW_EXPOSED
-						   || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-					// Handle OS presentation exposure updates cleanly
+					break;
+				}
+				uint32_t old_steps = ctx.current_half_steps;
+				if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
+					if (ctx.current_half_steps < 20)
+						ctx.current_half_steps++;
+				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
+					if (ctx.current_half_steps > 1)
+						ctx.current_half_steps--;
+				}
+				if (ctx.current_half_steps != old_steps) {
+					ctx.texture_cache_stale = true;
+					float updated_scale = (float) ctx.current_half_steps / 2.0f;
+					SDL_SetWindowSize(ctx.window, (int) lroundf(baseline_w * updated_scale),
+									  (int) lroundf(baseline_h * updated_scale));
 					force_redraw = true;
 				}
-			} while (SDL_PollEvent(&event));
+
+			} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+				uint32_t old_steps = ctx.current_half_steps;
+				if (event.wheel.y > 0.0f) {
+					if (ctx.current_half_steps < 20)
+						ctx.current_half_steps++;
+				} else if (event.wheel.y < 0.0f) {
+					if (ctx.current_half_steps > 1)
+						ctx.current_half_steps--;
+				}
+				if (ctx.current_half_steps != old_steps) {
+					ctx.texture_cache_stale = true;
+					float updated_scale = (float) ctx.current_half_steps / 2.0f;
+					SDL_SetWindowSize(ctx.window, (int) lroundf(baseline_w * updated_scale),
+									  (int) lroundf(baseline_h * updated_scale));
+					force_redraw = true;
+				}
+			} else if (event.type == SDL_EVENT_WINDOW_EXPOSED
+					   || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
+					   || event.type == SDL_EVENT_WINDOW_SHOWN) {
+				force_redraw = true;
+			}
 		}
 
-		/* Execute drawing mutations *exclusively* if a scaling bounds condition modified state */
-		if (force_redraw) {
-			force_redraw = false;
+		/* 2. DETERMINISTIC RENDERING PACING AND DISPATCH PASS */
+		Uint64 current_ticks = SDL_GetTicks();
 
+		// Enforce redraw if target frame timeline is due or explicitly requested by event
+		if (force_redraw || (current_ticks - last_frame_time >= frame_delay_ms)) {
+			force_redraw = false;
+			last_frame_time = current_ticks;
+
+			// ==========================================
+			// 1. RE-BAKE AND CACHE SUB-ATLAS SHEETS IF TEXTURE STATE TRANSITIONS
+			// ==========================================
 			if (ctx.texture_cache_stale) {
-				// Re-bake atlas shapes down to match the new crisp matrix scaling rules
 				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 											CatClock_ShaderHands, &hour_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 											CatClock_ShaderHands, &min_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
 											CatClock_ShaderHands, &sec_cfg);
-				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, ctx.target_fps, 10,
+				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, (ctx.target_fps * 2), 10,
 											CatClock_ShaderEyes, NULL);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
 											CatClock_ShaderTail, &tail_data);
+
 #ifdef DEBUG_DUMP
 				Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
 				printf("[Trace] Dynamic textures cached and committed to disk files.\n");
 #endif
+
+				CatClock_BakeAtlasToVram(&hours_atlas_image_slot, &hours_atlas_view_slot,
+										 ctx.hours_atlas.index_buffer, ctx.hours_atlas.atlas_w,
+										 ctx.hours_atlas.atlas_h, "CatClock-HoursHands-Atlas");
+				CatClock_BakeAtlasToVram(&minutes_atlas_image_slot, &minutes_atlas_view_slot,
+										 ctx.minutes_atlas.index_buffer, ctx.minutes_atlas.atlas_w,
+										 ctx.minutes_atlas.atlas_h, "CatClock-MinutesHands-Atlas");
+				CatClock_BakeAtlasToVram(&seconds_atlas_image_slot, &seconds_atlas_view_slot,
+										 ctx.seconds_atlas.index_buffer, ctx.seconds_atlas.atlas_w,
+										 ctx.seconds_atlas.atlas_h, "CatClock-SecondsHands-Atlas");
+				CatClock_BakeAtlasToVram(&eyes_atlas_image_slot, &eyes_atlas_view_slot,
+										 ctx.eyes_atlas.index_buffer, ctx.eyes_atlas.atlas_w,
+										 ctx.eyes_atlas.atlas_h, "CatClock-DynamicEyes-Atlas");
+				CatClock_BakeAtlasToVram(&tail_atlas_image_slot, &tail_atlas_view_slot,
+										 ctx.tail_atlas.index_buffer, ctx.tail_atlas.atlas_w,
+										 ctx.tail_atlas.atlas_h, "CatClock-DynamicTail-Atlas");
+
 				ctx.texture_cache_stale = false;
 			}
 
-			CatClock_ShaderUniforms shader_uniform_payload = { 0 };
+			// ==========================================
+			// 2. ALLOCATE AND CLEAR UNIFORM PAYLOAD MEMORY INSTANCE
+			// ==========================================
+			CatClock_ShaderUniforms shader_uniform_payload;
+			memset(&shader_uniform_payload, 0, sizeof(CatClock_ShaderUniforms));
+
+			// ==========================================
+			// 3. HARDWARE-LOCKED INITIALIZATION TIME PASS
+			// ==========================================
+			static bool first_time_init = true;
+			static Uint64 baseline_ticks = 0;
+			static float cached_day_time_seconds = 0.0f;
+
+			// Force calendar evaluation ONLY at boot or when scale factor is mutated (cache stale)
+			if (first_time_init || ctx.texture_cache_stale) {
+				time_t dynamic_raw_time = time(NULL);
+				struct tm* local_time_segments = localtime(&dynamic_raw_time);
+
+				cached_day_time_seconds
+					= (float) (local_time_segments->tm_hour * 3600
+							   + local_time_segments->tm_min * 60 + local_time_segments->tm_sec);
+
+				baseline_ticks = SDL_GetTicks();
+				first_time_init = false;
+				printf("[Timer Sync] Hard resync against wall-time executed. Base Offset: %.2fs\n",
+					   cached_day_time_seconds);
+			}
+
+			// Local memory timeline tracking via unified hardware timer deltas
+			float elapsed_delta_seconds = (float) (SDL_GetTicks() - baseline_ticks) / 1000.0f;
+			float computed_day_time_seconds = cached_day_time_seconds + elapsed_delta_seconds;
+
+			// Translate monotonic timeline parameters cleanly into standard clock face frames
+			int current_sec = (int) fmodf(computed_day_time_seconds, 60.0f);
+			int current_min = (int) fmodf(computed_day_time_seconds / 60.0f, 60.0f);
+			int current_hour = (int) fmodf(computed_day_time_seconds / 3600.0f, 12.0f);
+
+			int sec_frame_idx = current_sec % 60;
+			int min_frame_idx = current_min % 60;
+			int hour_frame_idx = ((current_hour * 5) + (current_min / 12)) % 60;
+
+			// ==========================================
+			// 4. MAP AND NORMALIZE CORE MATERIAL GRAPHICS PALETTES
+			// ==========================================
 			CatClock_NormalizeColorToUniform(ctx.cat_color, shader_uniform_payload.cat_color);
 			CatClock_NormalizeColorToUniform(ctx.tie_color, shader_uniform_payload.tie_color);
 			CatClock_NormalizeColorToUniform(ctx.pupil_color, shader_uniform_payload.pupil_color);
@@ -523,6 +698,40 @@ int main(int argc, char* argv[]) {
 			SDL_Color white_fallback = { 255, 255, 255, 255 };
 			CatClock_NormalizeColorToUniform(white_fallback, shader_uniform_payload.halo_color);
 
+			CatClock_NormalizeColorToUniform(ctx.hour_color, shader_uniform_payload.hour_color);
+			CatClock_NormalizeColorToUniform(ctx.minute_color, shader_uniform_payload.minute_color);
+			CatClock_NormalizeColorToUniform(ctx.second_color, shader_uniform_payload.second_color);
+
+			// ====================================================================
+			// 5. PACK EXPLICIT RENDER TARGET FRAME INDEXES (FULL CYCLE)
+			// ====================================================================
+			shader_uniform_payload.hour_frame_idx = hour_frame_idx;
+			shader_uniform_payload.min_frame_idx = min_frame_idx;
+			shader_uniform_payload.sec_frame_idx = sec_frame_idx;
+
+			// Walk linearly through all 60 baked frames across the full 2-second period
+			shader_uniform_payload.pendulum_frame_idx
+				= (int) fmodf(computed_day_time_seconds * 30.0f, 60.0f);
+
+			// ====================================================================
+			// 6. TERMINAL PRINTF DIAGNOSTIC TELEMETRY CAPTURE MONITOR
+			// ====================================================================
+			static int dynamic_diagnostic_ticks = 0;
+			if (dynamic_diagnostic_ticks++ % 30 == 0) {
+				printf("\n[Pipeline Diagnostic Pass #%d]\n", dynamic_diagnostic_ticks);
+				printf("  -> System Time Captured : %02d:%02d:%02d\n", current_hour, current_min,
+					   current_sec);
+				printf("  -> Target Frame Indexes : Hour=%d, Min=%d, Sec=%d, Pendulum=%d\n",
+					   hour_frame_idx, min_frame_idx, sec_frame_idx,
+					   shader_uniform_payload.pendulum_frame_idx);
+				printf("  -> Hours Atlas Address  : %p | Shared hardware timelines synced.\n",
+					   (void*) ctx.hours_atlas.index_buffer);
+				fflush(stdout);
+			}
+
+			// ====================================================================
+			// 7. RECORD AND DISPATCH GRAPHICS PIPELINE COMMANDS
+			// ====================================================================
 			int current_viewport_w = 0, current_viewport_h = 0;
 			SDL_GetWindowSize(ctx.window, &current_viewport_w, &current_viewport_h);
 
@@ -536,11 +745,30 @@ int main(int argc, char* argv[]) {
 
 			sg_apply_pipeline(ctx.draw_pipeline);
 
+			if (!ctx.use_decorations) {
+				// Pin scale cleanly to individual monitor grid indices
+				float single_pixel_scale = (float) current_viewport_w / 103.0f;
+
+				// Shift left by 23 columns to leave a 1px spacer for the left outline path
+				int negative_x_box = (int) lroundf(-23.0f * single_pixel_scale);
+				int full_padded_w = (int) lroundf(128.0f * single_pixel_scale);
+
+				sg_apply_viewport(negative_x_box, 0, full_padded_w, current_viewport_h, true);
+			} else {
+				sg_apply_viewport(0, 0, current_viewport_w, current_viewport_h, true);
+			}
+
 			sg_bindings clock_resource_bindings = { 0 };
 			clock_resource_bindings.vertex_buffers[0] = ctx.vertex_buffer;
 			clock_resource_bindings.index_buffer = ctx.index_buffer;
-			clock_resource_bindings.views[0] = ctx.body_mask_view;
 			clock_resource_bindings.samplers[0] = ctx.body_mask_sampler;
+
+			clock_resource_bindings.views[VIEW_texture_sheet] = ctx.body_mask_view;
+			clock_resource_bindings.views[VIEW_hours_hand_sheet] = hours_atlas_view_slot;
+			clock_resource_bindings.views[VIEW_mins_hand_sheet] = minutes_atlas_view_slot;
+			clock_resource_bindings.views[VIEW_seconds_hand_sheet] = seconds_atlas_view_slot;
+			clock_resource_bindings.views[VIEW_eyes_sheet] = eyes_atlas_view_slot;
+			clock_resource_bindings.views[VIEW_tail_sheet] = tail_atlas_view_slot;
 
 			sg_apply_bindings(&clock_resource_bindings);
 			sg_apply_uniforms(UB_cb_params, &SG_RANGE(shader_uniform_payload));
@@ -550,6 +778,12 @@ int main(int argc, char* argv[]) {
 			sg_commit();
 
 			SDL_GL_SwapWindow(ctx.window);
+		}
+
+		/* 3. CAP FRAME INTERVAL TO ENFORCE TARGET_FPS CAP (IF VSYNC IS DISABLED) */
+		Uint64 loop_execution_duration = SDL_GetTicks() - frame_start_ticks;
+		if (loop_execution_duration < frame_delay_ms) {
+			SDL_Delay((Uint32) (frame_delay_ms - loop_execution_duration));
 		}
 	}
 
@@ -567,6 +801,17 @@ int main(int argc, char* argv[]) {
 		CatClock_DestroyXbmLibrary(runtime_xbm_handle);
 		runtime_xbm_handle = NULL;
 	}
+
+	if (sg_query_view_state(hours_atlas_view_slot) == SG_RESOURCESTATE_VALID)
+		sg_destroy_view(hours_atlas_view_slot);
+	if (sg_query_view_state(minutes_atlas_view_slot) == SG_RESOURCESTATE_VALID)
+		sg_destroy_view(minutes_atlas_view_slot);
+	if (sg_query_view_state(seconds_atlas_view_slot) == SG_RESOURCESTATE_VALID)
+		sg_destroy_view(seconds_atlas_view_slot);
+	if (sg_query_view_state(eyes_atlas_view_slot) == SG_RESOURCESTATE_VALID)
+		sg_destroy_view(eyes_atlas_view_slot);
+	if (sg_query_view_state(tail_atlas_view_slot) == SG_RESOURCESTATE_VALID)
+		sg_destroy_view(tail_atlas_view_slot);
 
 	if (sg_query_pipeline_state(ctx.draw_pipeline) == SG_RESOURCESTATE_VALID) {
 		sg_destroy_pipeline(ctx.draw_pipeline);
