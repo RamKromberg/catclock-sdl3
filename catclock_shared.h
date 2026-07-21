@@ -85,25 +85,6 @@ typedef struct {
 	float uv[2]; // u, v mapping boundaries array
 } CatClock_GpuVertex;
 
-typedef struct {
-	// Exactly 16 bytes total - Perfectly aligned to a single GPU register slot
-	int32_t hour_frame_idx;
-	int32_t min_frame_idx;
-	int32_t sec_frame_idx;
-	int32_t pendulum_frame_idx;
-
-	// Remaining color properties (each natively occupying a 16-byte vec4 layout slot)
-	float cat_color[4];
-	float tie_color[4];
-	float pupil_color[4];
-	float sclera_color[4];
-	float detail_color[4];
-	float halo_color[4];
-	float hour_color[4];
-	float minute_color[4];
-	float second_color[4];
-} CatClock_ShaderUniforms;
-
 /* Cleaned, Sokol-ready framework-agnostic atlas context structure */
 typedef struct {
 	uint8_t* index_buffer; // 8-bit CPU palette configuration map

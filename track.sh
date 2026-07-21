@@ -68,10 +68,47 @@ trap 'rm -f "$CPU_LAST" "$CPU_CURR" "$SYS_LAST" "$RAW_STORE" "$CALC_STORE" "$FRA
 > "$CPU_LAST"
 echo "0" > "$SYS_LAST"
 
+# Helper function to get per-process VRAM (supports AMDGPU debugfs)
+get_process_vram() {
+    local target_pid=$1
+    local total_vram_kb=0
+
+    # Ensure the process folder is currently accessible
+    if [ -d "/proc/$target_pid/fdinfo" ]; then
+        # Loop over every active file descriptor configuration
+        for fd_meta in /proc/$target_pid/fdinfo/*; do
+            if [ -f "$fd_meta" ]; then
+                # Pull lines stating memory allocation footprints
+                # Note: Handles both raw bytes/KiB formats and unit suffixes (MiB/KiB)
+                local allocation=$(awk '/drm-memory-vram:/ {print $2}' "$fd_meta" 2>/dev/null)
+                local unit=$(awk '/drm-memory-vram:/ {print $3}' "$fd_meta" 2>/dev/null)
+                
+                if [ -n "$allocation" ]; then
+                    # Standardize everything to Kilobytes for the math segment
+                    if [ "$unit" = "MiB" ]; then
+                        allocation=$((allocation * 1024))
+                    elif [ "$unit" = "GiB" ]; then
+                        allocation=$((allocation * 1024 * 1024))
+                    fi
+                    total_vram_kb=$((total_vram_kb + allocation))
+                fi
+            fi
+        done
+    fi
+
+    # Convert the running sum up to Megabytes (M) for your display column
+    if [ "$total_vram_kb" -eq 0 ]; then
+        echo "0M"
+    else
+        echo "$((total_vram_kb / 1024))M"
+    fi
+}
+
+
 while true; do
   ps -AT -o pid= -o lwp= -o user= -o vsz= -o rss= -o %mem= -o time= -o comm= -o args= | \
 	grep "catclock-sdl3" | \
-	grep -vE "(foot|bash|sh|grep|track.sh)" | \
+	grep -vE "(foot|bash|sh|grep|gimp|track.sh)" | \
 	sort -k1,1n -k2,2n > "$RAW_STORE"
 
   SYS_TICKS2=$(awk '/^cpu / {print $2+$3+$4+$5+$6+$7+$8+$9+$10}' /proc/stat)
@@ -158,7 +195,7 @@ while true; do
 	  thread_vram="0M"
 	  rank=2
 	else
-	  thread_vram="$VRAM_M"
+	  thread_vram=$(get_process_vram "$pid")
 	  rank=1
 	fi
 
@@ -207,11 +244,12 @@ while true; do
   done >> "$FRAME_TMP"
 
   clear
+  # DEDICATED SYSTEM STATS HEADER LINE
+  printf "${BOLD}System GPU VRAM Total Footprint Used:${RESET} ${VRAM_COLOR}%s${RESET}\n" "$VRAM_M"
   printf "%b\n" "$FRAME"
   cat "$FRAME_TMP"
 
   cat "$CPU_CURR" > "$CPU_LAST"
   echo "$SYS_TICKS2" > "$SYS_LAST"
-
   sleep "$INTERVAL"
 done
