@@ -36,6 +36,7 @@ let
   my-python-env = pkgs.python3.withPackages (ps: with ps; [
     opencv4
     numpy
+    scipy
   ]); # precompute_clockface: approximate the clockface lame curve and bake it into the c source instead of wasting cycles on it during pre-bake/live rendering
 in
 
@@ -68,6 +69,7 @@ pkgs.mkShell {
     libGL.dev libGL libGLU
     libx11.dev
     wayland.dev
+    freetype
   ];
 
   buildInputs = [

@@ -188,9 +188,6 @@ void DrawTriangleFloat(uint8_t* buffer, float x0, float y0, float x1, float y1, 
 					   int width, int height, uint8_t token);
 void DrawTriangleLegacy(uint8_t* buffer, int x0, int y0, int x1, int y1, int x2, int y2, int width,
 						int height, uint8_t token);
-void DrawTriangleFixedSDF(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0,
-						  int32_t fx_x1, int32_t fx_y1, int32_t fx_x2, int32_t fx_y2,
-						  int width, int height, uint8_t token);
 
 /* Shader pipeline reference routines */
 void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_w, int sheet_h,

@@ -10,8 +10,8 @@ else
     SYS_LIBS = -ldl
 endif
 
-CFLAGS = -Wall -Wextra -O2 $(SOKOL_FLAGS) $(shell pkg-config --cflags sdl3)
-LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
+CFLAGS = -Wall -Wextra -O2 $(SOKOL_FLAGS) $(shell pkg-config --cflags sdl3) $(shell pkg-config --cflags freetype2)
+LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL $(shell pkg-config --libs freetype2)
 
 TARGET = catclock-sdl3
 SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_atlas.c catclock_rasterizer.c catclock_tail.c catclock_eyes.c catclock_hands.c

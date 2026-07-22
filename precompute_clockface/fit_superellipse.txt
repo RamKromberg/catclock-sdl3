@@ -1,0 +1,19 @@
+=== OPTIMIZING LAMÉ CURVE PARAMETERS ===
+
+Q1 (Top-Right):
+  -> Optimized Parameters: a = 30.4978, b = 39.6495, n = 2.4166
+  -> Mean Square Distance Error: 0.157530 px
+
+Q2 (Bottom-Right):
+  -> Optimized Parameters: a = 30.7448, b = 43.3683, n = 2.6605
+  -> Mean Square Distance Error: 0.473672 px
+
+Q3 (Bottom-Left):
+  -> Optimized Parameters: a = 30.7717, b = 43.3313, n = 2.6324
+  -> Mean Square Distance Error: 0.538538 px
+
+Q4 (Top-Left):
+  -> Optimized Parameters: a = 30.4939, b = 39.7917, n = 2.4017
+  -> Mean Square Distance Error: 0.160616 px
+
+Sanity check rendering committed to 'superellipse_fit_verification.png'.
