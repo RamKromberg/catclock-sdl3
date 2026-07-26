@@ -97,7 +97,7 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 	if (ctx.texture_cache_stale) {
 /* System Asset Automated Blueprint Dumps System */
 /* STAGE 2: Force disk dumps to overwrite whenever texture cache state transitions */
-#ifdef DEBUG_DUMP
+#ifdef DEBUG_DUMP_ATLAS
 		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_HAND_PHASES) {
 			struct {
 				int type;

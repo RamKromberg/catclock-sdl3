@@ -115,6 +115,7 @@ typedef struct {
 	/* Configured interface color parameters */
 	SDL_Color fg_color;
 	SDL_Color bg_color;
+	SDL_Color window_bg_color;
 	SDL_Color cat_color;
 	SDL_Color tie_color;
 	SDL_Color pupil_color;
@@ -123,7 +124,7 @@ typedef struct {
 	SDL_Color minute_color;
 	SDL_Color second_color;
 	SDL_Color detail_color;
-	SDL_Color window_bg_color;
+	SDL_Color outline_color;
 
 	/* Foundational asset layout bitmasks retained for alignment verification */
 	uint8_t* hitbox_bits;

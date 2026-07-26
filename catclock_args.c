@@ -49,6 +49,7 @@ void PrintHelpDocumentation(const char* program_name) {
 	printf("  --hourscolor [hex]      Override default hour clock hand hex color.\n");
 	printf("  --minutescolor [hex]    Override default minute clock hand hex color.\n");
 	printf("  --secondscolor [hex]    Override default sweeping second hand hex color.\n");
+	printf("  --outlinecolor [hex]    Override default outline color.\n");
 }
 
 /**
@@ -98,6 +99,7 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	context->second_color = (SDL_Color) { 255, 0, 0, 255 };
 	context->detail_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->sclera_color = (SDL_Color) { 255, 255, 255, 255 };
+	context->outline_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->current_half_steps = 2;
 	context->hide_seconds = false;
@@ -167,6 +169,10 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 		} else if (strcmp(argv[i], "--secondscolor") == 0) {
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &context->second_color);
+			}
+		} else if (strcmp(argv[i], "--outlinecolor") == 0) {
+			if ((i + 1) < argc) {
+				HelperParseHexColor(argv[++i], &context->outline_color);
 			}
 		} else if (strcmp(argv[i], "--fps") == 0) {
 			if ((i + 1) < argc) {
