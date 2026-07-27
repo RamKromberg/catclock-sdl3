@@ -20,10 +20,17 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include FT_OUTLINE_H
-#include FT_IMAGE_H
+
+#define STANDALONE_
+#ifndef FALL_THROUGH
+#if defined(__GNUC__) && __GNUC__ >= 7
+#define FALL_THROUGH __attribute__((fallthrough))
+#else
+#define FALL_THROUGH ((void) 0)
+#endif
+#endif
+#include "ftgrays.c"
+#define STANDALONE_RASTER_POOL_SIZE (1024 * 128)
 
 typedef struct {
 	uint8_t* buffer;
@@ -610,12 +617,6 @@ void DrawTriangleFreetype(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t
 	if (width <= 0 || height <= 0 || buffer == NULL)
 		return;
 
-	FT_Library library;
-	if (FT_Init_FreeType(&library)) {
-		fprintf(stderr, "[Freetype Draw] Could not initialize library context\n");
-		return;
-	}
-
 	// Direct, un-drifted translation down to FreeType 26.6 fixed-point space
 	FT_Vector points[3];
 	points[0].x = (FT_Pos) (fx_x0 >> 2);
@@ -628,27 +629,31 @@ void DrawTriangleFreetype(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t
 	char tags[] = { FT_CURVE_TAG_ON, FT_CURVE_TAG_ON, FT_CURVE_TAG_ON };
 	unsigned short contours[] = { 2 };
 
-	FT_Outline outline;
-	outline.n_points = 3;
-	outline.n_contours = 1;
-	outline.points = points;
-	outline.tags = (unsigned char*) tags;
-	outline.contours = contours;
-	outline.flags = FT_OUTLINE_SMART_DROPOUTS | FT_OUTLINE_INCLUDE_STUBS;
+	FT_Outline outline = { .n_points = 3,
+						   .n_contours = 1,
+						   .points = points,
+						   .tags = (unsigned char*) tags,
+						   .contours = contours,
+						   .flags = FT_OUTLINE_SMART_DROPOUTS | FT_OUTLINE_INCLUDE_STUBS };
+
+	FT_Raster raster;
+	if (ft_grays_raster.raster_new(NULL, &raster) != 0)
+		return;
+
+	unsigned char raster_pool[STANDALONE_RASTER_POOL_SIZE];
+	ft_grays_raster.raster_reset(raster, raster_pool, STANDALONE_RASTER_POOL_SIZE);
 
 	FreetypeRenderTarget target
 		= { .buffer = buffer, .width = width, .height = height, .token = token };
+	FT_Raster_Params params
+		= { .flags = FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_AA,
+			.gray_spans = render_freetype_span_callback,
+			.user = &target,
+			.source = &outline,
+			.clip_box = { .xMin = 0, .yMin = 0, .xMax = width, .yMax = height } };
 
-	FT_Raster_Params params;
-	memset(&params, 0, sizeof(params));
-	params.flags = FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_AA;
-	params.gray_spans = render_freetype_span_callback;
-	params.user = &target;
-	params.source = &outline;
-
-	FT_Outline_Render(library, &outline, &params);
-
-	FT_Done_FreeType(library);
+	ft_grays_raster.raster_render(raster, &params);
+	ft_grays_raster.raster_done(raster);
 }
 
 void DrawCapsuleFreetype(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t fx_x1,
@@ -665,10 +670,6 @@ void DrawCapsuleFreetype(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t 
 	   Invoking FreeType directly allows us to render a hardware-accelerated
 	   quadratic arc cap over the axle center pin.
 	   ========================================================================= */
-	FT_Library library;
-	if (FT_Init_FreeType(&library)) {
-		return;
-	}
 
 	// Locate the structural center point of your mitered rear baseline edge
 	int32_t mid_base_x = (fx_x1 + fx_x2) >> 1;
@@ -696,27 +697,33 @@ void DrawCapsuleFreetype(uint8_t* buffer, int32_t fx_x0, int32_t fx_y0, int32_t 
 	char tags[] = { FT_CURVE_TAG_ON, FT_CURVE_TAG_CONIC, FT_CURVE_TAG_ON };
 	unsigned short contours[] = { 2 };
 
-	FT_Outline outline;
-	outline.n_points = 3;
-	outline.n_contours = 1;
-	outline.points = cap_points;
-	outline.tags = (unsigned char*) tags;
-	outline.contours = contours;
-	outline.flags = FT_OUTLINE_SMART_DROPOUTS | FT_OUTLINE_INCLUDE_STUBS;
+	FT_Outline outline = { .n_points = 3,
+						   .n_contours = 1,
+						   .points = cap_points,
+						   .tags = (unsigned char*) tags,
+						   .contours = contours,
+						   .flags = FT_OUTLINE_SMART_DROPOUTS | FT_OUTLINE_INCLUDE_STUBS };
+
+	FT_Raster raster;
+	if (ft_grays_raster.raster_new(NULL, &raster) != 0)
+		return;
+
+	unsigned char raster_pool[STANDALONE_RASTER_POOL_SIZE];
+	ft_grays_raster.raster_reset(raster, raster_pool, STANDALONE_RASTER_POOL_SIZE);
 
 	FreetypeRenderTarget target
 		= { .buffer = buffer, .width = width, .height = height, .token = token };
 
-	FT_Raster_Params params;
-	memset(&params, 0, sizeof(params));
-	params.flags = FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_AA;
-	params.gray_spans = render_freetype_span_callback;
-	params.user = &target;
-	params.source = &outline;
+	FT_Raster_Params params
+		= { .flags = FT_RASTER_FLAG_DIRECT | FT_RASTER_FLAG_AA,
+			.gray_spans = render_freetype_span_callback,
+			.user = &target,
+			.source = &outline,
+			.clip_box = { .xMin = 0, .yMin = 0, .xMax = width, .yMax = height } };
 
 	// Render the smooth trailing base arc directly onto your frame palette buffer
-	FT_Outline_Render(library, &outline, &params);
-	FT_Done_FreeType(library);
+	ft_grays_raster.raster_render(raster, &params);
+	ft_grays_raster.raster_done(raster);
 }
 
 #ifdef DEBUG_DUMP_HAND_VERTICIES

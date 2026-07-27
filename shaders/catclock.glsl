@@ -1,3 +1,4 @@
+#version 450
 // ==============================================================================
 // 1. UNIVERSAL PASS-THROUGH VERTEX PIPELINE
 // ==============================================================================
@@ -34,14 +35,14 @@ layout(binding = 0) uniform cb_params_bake {
 };
 
 layout(binding = 0) uniform texture2D texture_sheet;
-layout(binding = 0) uniform sampler sampler_state;
+layout(binding = 0) uniform sampler main_sampler;
 
 in vec2 frag_uv;
 out vec4 frag_color;
 
 void main() {
     // Read the master unpacked canvas channels out of texture memory
-    vec4 mask = texture(sampler2D(texture_sheet, sampler_state), frag_uv);
+    vec4 mask = texture(sampler2D(texture_sheet, main_sampler), frag_uv);
     bool is_solid_body = (mask.r > 0.5);
     bool is_tie = (mask.g > 0.5);
     bool is_detail = (mask.b > 0.5);
@@ -52,14 +53,14 @@ void main() {
         vec2 dx = dFdx(frag_uv);
         vec2 dy = dFdy(frag_uv);
         bool outline_hit = false;
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv - dx + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv + dx + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv - dx).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv + dx).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv - dx - dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv - dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, sampler_state), frag_uv + dx - dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx + dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx + dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx - dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dy).r > 0.5);
+        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx - dy).r > 0.5);
 
         if (is_solid_body) {
             frag_color = vec4(cat_color.xyz, 1.0);
@@ -102,7 +103,7 @@ layout(binding = 0) uniform cb_tail_params {
     vec4 outline_color;
 };
 layout(binding = 5) uniform texture2D tail_sheet;
-layout(binding = 0) uniform sampler sampler_state;
+layout(binding = 0) uniform sampler main_sampler;
 
 in vec2 frag_uv;
 out vec4 frag_color;
@@ -130,23 +131,23 @@ void main() {
     tail_box_uv.y = (overlay_uv.y - (192.0 / 290.0)) / (96.0 / 290.0);
 
     float rows = float(tail_pupils_rows);
-    float center_sample = texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv, tail_frame, rows)).x;
+    float center_sample = texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv, tail_frame, rows)).x;
     bool is_solid_body = (center_sample > 0.0);
 
-    ivec2 texture_dimensions = textureSize(sampler2D(tail_sheet, sampler_state), 0);
+    ivec2 texture_dimensions = textureSize(sampler2D(tail_sheet, main_sampler), 0);
     vec2 pixel_step = 1.0 / vec2(texture_dimensions);
     // DYNAMIC FIXED: Stepping parameters adjust relative to the active runtime layout matrix height
     vec2 step_offset = pixel_step * vec2(10.0, rows);
 
     bool halo_hit = false;
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, step_offset.y), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(0.0, step_offset.y), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, step_offset.y), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, 0.0), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, 0.0), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, -step_offset.y), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(0.0, -step_offset.y), tail_frame, rows)).x > 0.0);
-    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, sampler_state), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, -step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(0.0, step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, 0.0), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, 0.0), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(-step_offset.x, -step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(0.0, -step_offset.y), tail_frame, rows)).x > 0.0);
+    halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, -step_offset.y), tail_frame, rows)).x > 0.0);
 
     if (is_solid_body) {
         frag_color = vec4(cat_color.xyz, 1.0);
@@ -173,7 +174,7 @@ layout(binding = 1) uniform cb_hands_params {
 layout(binding = 1) uniform texture2D hours_hand_sheet;
 layout(binding = 2) uniform texture2D mins_hand_sheet;
 layout(binding = 3) uniform texture2D seconds_hand_sheet;
-layout(binding = 0) uniform sampler sampler_state;
+layout(binding = 0) uniform sampler main_sampler;
 
 in vec2 frag_uv;
 out vec4 frag_color;
@@ -195,9 +196,9 @@ void main() {
     }
 
     vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / 128.0)) / (64.0 / 128.0), (overlay_uv.y - (95.0 / 290.0)) / (96.0 / 290.0));
-    bool hour_hit = texture(sampler2D(hours_hand_sheet, sampler_state), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
-    bool min_hit = texture(sampler2D(mins_hand_sheet, sampler_state), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
-    bool sec_hit = texture(sampler2D(seconds_hand_sheet, sampler_state), CalculateAtlasUvHands(hand_box_uv, sec_frame, 6.0)).x > 0.001;
+    bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
+    bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
+    bool sec_hit = texture(sampler2D(seconds_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, sec_frame, 6.0)).x > 0.001;
     vec4 mixed_pixel = vec4(0.0);
     if (hour_hit) mixed_pixel = vec4(hour_color.xyz, 1.0);
     if (min_hit) mixed_pixel = vec4(minute_color.xyz, 1.0);
@@ -222,7 +223,7 @@ layout(binding = 2) uniform cb_pupil_params {
 };
 
 layout(binding = 4) uniform texture2D eyes_sheet;
-layout(binding = 0) uniform sampler sampler_state;
+layout(binding = 0) uniform sampler main_sampler;
 
 in vec2 frag_uv;
 out vec4 frag_color;
@@ -251,7 +252,7 @@ void main() {
     eyes_box_uv.y = (overlay_uv.y - (17.0 / 290.0)) / (32.0 / 290.0);
 
     float rows = float(tail_pupils_rows);
-    vec4 pupil_sample = texture(sampler2D(eyes_sheet, sampler_state), CalculateAtlasUvPupils(eyes_box_uv, pupil_frame, rows));
+    vec4 pupil_sample = texture(sampler2D(eyes_sheet, main_sampler), CalculateAtlasUvPupils(eyes_box_uv, pupil_frame, rows));
 
     // Purely evaluate and paint the pupil vector token channel match (Token ID 3)
     if (int(round(pupil_sample.x * 255.0)) == 3) {
@@ -267,25 +268,34 @@ void main() {
 // 6. FLAT OFFSCREEN LAYER COMPOSITOR MIXER
 // ==============================================================================
 #pragma sokol @fs fs_composite
+
+layout(binding = 0) uniform sampler main_sampler;
 layout(binding = 6) uniform texture2D rt_backdrop_tex;
 layout(binding = 7) uniform texture2D rt_foreground_tex;
-layout(binding = 0) uniform sampler sampler_state;
 
 in vec2 frag_uv;
 out vec4 frag_color;
 
 void main() {
-    vec2 flipped_uv = vec2(frag_uv.x, 1.0 - frag_uv.y);
+    // SOKOL_GLSL is natively recognized by sokol-shdc when building the GLSL source blocks.
+    // This isolates the vertical texture correction exclusively to the OpenGL translation layer.
+    #if defined(SOKOL_GLCORE)
+    vec2 corrected_body_uv = vec2(frag_uv.x, 1.0 - frag_uv.y);
+    #else
+    vec2 corrected_body_uv = frag_uv;
+    #endif
 
-    vec4 backdrop = texture(sampler2D(rt_backdrop_tex, sampler_state), flipped_uv);
-    vec4 foreground = texture(sampler2D(rt_foreground_tex, sampler_state), flipped_uv);
+    vec4 backdrop = texture(sampler2D(rt_backdrop_tex, main_sampler), corrected_body_uv);
+    vec4 foreground = texture(sampler2D(rt_foreground_tex, main_sampler), corrected_body_uv);
 
     vec4 composition = mix(backdrop, foreground, foreground.a);
     if (composition.a < 0.01) {
         discard;
     }
+
     frag_color = composition;
 }
+
 #pragma sokol @end
 
 // ==============================================================================

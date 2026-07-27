@@ -1,31 +1,38 @@
 CC = gcc
 
-# Minimal Stage 4 Sokol Platform Detection Hooks
+# Linux Host Target Detection
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-    SOKOL_FLAGS = -DSOKOL_GLCORE
+    HOST_SOKOL_FLAGS = -DSOKOL_GLCORE
     SYS_LIBS = -ldl
 else
-    SOKOL_FLAGS = -DSOKOL_GLCORE
+    HOST_SOKOL_FLAGS = -DSOKOL_GLCORE
     SYS_LIBS = -ldl
 endif
 
-CFLAGS = -Wall -Wextra -O2 $(SOKOL_FLAGS) $(shell pkg-config --cflags sdl3) $(shell pkg-config --cflags freetype2)
-LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL $(shell pkg-config --libs freetype2)
-
+# Cleanly separate Host and Cross CFLAGS strings
+CFLAGS += -Wall -Wextra -O2 $(HOST_SOKOL_FLAGS) $(shell pkg-config --cflags sdl3) -I./freetype -Wno-pointer-sign
+LIBS = $(shell pkg-config --libs sdl3) -lm $(SYS_LIBS) -lGL
 TARGET = catclock-sdl3
+
 SRCS = catclock_main.c catclock_args.c catclock_assets.c catclock_atlas.c catclock_rasterizer.c catclock_tail.c catclock_eyes.c catclock_hands.c
-HEADERS = catclock_shared.h catclock_shaders.h
+HEADERS = catclock_shared.h
 OBJS = $(SRCS:.c=.o)
 WIN_OBJS = $(SRCS:.c=.win.o)
 
 # Windows MinGW Cross-Compiler Targets
 WIN_CC = x86_64-w64-mingw32-gcc
 WIN_WINDRES = x86_64-w64-mingw32-windres
-WIN_TARGET = catclock-sdl3.exe
+WIN_TARGET = bin/catclock-sdl3.exe
 WIN_SOKOL_FLAGS = -DSOKOL_D3D11
-WIN_LIBS = catclock-sdl3_resource.o -L$(WINDOWS_SDL_PREFIX)/lib -lSDL3 -lm -mwindows -ld3d11 -ldxgi
-WIN_CFLAGS = -Wall -Wextra -O2 $(WIN_SOKOL_FLAGS) -I$(WINDOWS_SDL_PREFIX)/include
+
+WIN_LIBS = catclock-sdl3_resource.o \
+           -L$(WINDOWS_SDL_PREFIX)/lib \
+           -lSDL3 -lm -mwindows -ld3d11 -ldxgi -lgdi32 -lole32 -luuid
+
+WIN_CFLAGS += -Wall -Wextra -O2 $(WIN_SOKOL_FLAGS) \
+             -I$(WINDOWS_SDL_PREFIX)/include \
+			 -I./freetype -Wno-pointer-sign
 
 # Verified official stable upstream production release asset variables
 SDL_VER = 3.4.10
@@ -43,18 +50,24 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $(TARGET) $(LIBS)
 
-%.o: %.c $(HEADERS)
+%.o: %.c catclock_shaders_gl.h $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # Pattern rule for cross-compilation objects
-%.win.o: %.c $(HEADERS)
+%.win.o: %.c catclock_shaders_d3d11.h $(HEADERS)
 	$(WIN_CC) $(WIN_CFLAGS) -c $< -o $@
 
-catclock_shaders.h: ./shaders/catclock.glsl
-	sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders.h --slang glsl430
+# Generates a unified header supporting both desktop and web/mobile OpenGL
+catclock_shaders_gl.h: ./shaders/catclock.glsl
+	sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders_gl.h --slang glsl410 --defines SOKOL_GLCORE
+	#sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders_gl.h --slang glsl410:glsl300es --defines SOKOL_GLCORE
+
+# Generates a header for DirectX target environments
+catclock_shaders_d3d11.h: ./shaders/catclock.glsl
+	sokol-shdc --input ./shaders/catclock.glsl --output catclock_shaders_d3d11.h --slang hlsl4
 
 # Deterministic source formatting utility target
-FORMAT_NONTARGETS = catclock_shaders.h
+FORMAT_NONTARGETS = catclock_shaders_gl.h catclock_shaders_d3d11.h
 format:
 	#clang-format -i $(SRCS) $(HEADERS)
 	@for file in catclock_*.c catclock_*.h; do \
@@ -134,14 +147,30 @@ catclock-sdl3_resource.o: resource.rc
 	$(WIN_WINDRES) resource.rc -o catclock-sdl3_resource.o
 
 windows: catclock-sdl3_resource.o $(WIN_OBJS)
+	@echo "Staging build directories..."
+	@mkdir -p bin/assets
+	@echo "Copying application vector assets to distribution envelope..."
+	@cp assets/catback.xbm bin/assets/
+	@cp assets/cattie.xbm bin/assets/
+	@cp assets/catwhite.xbm bin/assets/
+	@cp assets/eyes.xbm bin/assets/
+	@cp assets/hitbox.xbm bin/assets/
+	@echo "Resolving and copying dynamic library dependencies from Nix store..."
+	@# Bundle SDL3.dll
+#	@if [ -n "$$WINDOWS_SDL_OUT" ] && [ -f "$$WINDOWS_SDL_OUT/bin/SDL3.dll" ]; then \
+#		install -m 755 "$$WINDOWS_SDL_OUT/bin/SDL3.dll" ./bin/SDL3.dll; \
+#		echo " -> Safely bundled SDL3.dll"; \
+#	else \
+#		echo "ERROR: Unable to locate SDL3.dll inside WINDOWS_SDL_OUT path!"; exit 1; \
+#	fi
 	@echo "Checking operational environment for $(SDL_DLL)..."
 	@DLL_VALID=0; \
-	if [ -f "$(SDL_DLL)" ]; then \
-		DLL_SZ=$$(wc -c < "$(SDL_DLL)" | tr -d ' '); \
-		if [ "$$DLL_SZ" -eq $(SDL_DLL_SIZE) ] && echo "$(SDL_DLL_SHA256)  $(SDL_DLL)" | sha256sum --check --status; then \
+	if [ -f "./bin/$(SDL_DLL)" ]; then \
+		DLL_SZ=$$(wc -c < "./bin/$(SDL_DLL)" | tr -d ' '); \
+		if [ "$$DLL_SZ" -eq $(SDL_DLL_SIZE) ] && echo "$(SDL_DLL_SHA256)  ./bin/$(SDL_DLL)" | sha256sum --check --status; then \
 			DLL_VALID=1; \
 		else \
-			ACTUAL_HASH=$$(sha256sum "$(SDL_DLL)" | awk '{print $$1}'); \
+			ACTUAL_HASH=$$(sha256sum "./bin/$(SDL_DLL)" | awk '{print $$1}'); \
 			echo "Local $(SDL_DLL) is corrupt or invalid!"; \
 			echo " -> Expected Size: $(SDL_DLL_SIZE) | Got: $$DLL_SZ"; \
 		fi; \
@@ -163,13 +192,13 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 			exit 1; \
 		fi; \
 		echo "Extracting runtime dependencies..."; \
-		unzip -p "$(SDL_ZIP)" $(SDL_DLL) > "$(SDL_DLL)"; \
-	fi; \
-	echo "Blitting application objects for Windows..."
+		unzip -p "$(SDL_ZIP)" $(SDL_DLL) > "./bin/$(SDL_DLL)"; \
+	fi;
+	@echo "Blitting application objects for Windows..."
 	@$(MAKE) $(WIN_OBJS)
 	@echo "Linking final cross-compiled executable binary..."
 	$(WIN_CC) $(WIN_OBJS) -o $(WIN_TARGET) $(WIN_LIBS)
-	rm -f *.win.o
+	@rm -f *.win.o
 	@if [ -f "cert.pfx" ]; then \
 		echo "Detected cert.pfx file. Commencing Authenticode signing processing sequence..."; \
 		if command -v osslsigncode >/dev/null 2>&1; then \
@@ -177,22 +206,23 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 			mv $(WIN_TARGET).signed $(WIN_TARGET); \
 			echo "Binary signature appended successfully."; \
 		else \
-			echo "Warning: cert.pfx found but 'osslsigncode' tool is missing from path environment!"; \
+			echo "Warning: cert.pfx found but ’osslsigncode’ tool is missing from path environment!" ; \
 		fi; \
 	else \
 		echo "No cert.pfx signature asset found. Skipping code-signing phase."; \
 	fi
 	@echo "========================================================================="
-	@echo "Done! Transfer '$(WIN_TARGET)' and 'SDL3.dll' to your Windows machine."
+	@echo "Done! Final release payload bundled locally in the ./bin/ directory."
 	@echo "========================================================================="
 
 clean:
 	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) catclock-sdl3_resource.o 
 	rm -f *.png *.pgm *.pam
 	rm -f resource.rc catclock_icon.ico
-	rm -f catclock_shaders.h
+	rm -f catclock_shaders_gl.h
+	rm -f catclock_shaders_d3d11.h
 
 clean-dist: clean
-	rm -f $(SDL_DLL) $(SDL_ZIP)
+	rm -rf bin/
 
-.PHONY: all windows assets clean clean-dist format
+.PHONY: all windows assets clean format

@@ -24,13 +24,41 @@
 #ifndef SOKOL_IMPL
 #define SOKOL_IMPL
 #endif
-#ifndef SOKOL_GLCORE
+#if !defined(SOKOL_GLCORE) && !defined(SOKOL_D3D11) && !defined(SOKOL_METAL)
 #define SOKOL_GLCORE
 #endif
 
 #include "sokol/sokol_gfx.h"
 #include "sokol/sokol_log.h"
-#include "catclock_shaders.h"
+#if defined(SOKOL_D3D11)
+#include "catclock_shaders_d3d11.h"
+#else
+#include "catclock_shaders_gl.h"
+#endif
+
+#if defined(SOKOL_D3D11)
+#include <d3d11.h>
+
+/* Global engine pointers needed to map our custom presentation pass handles */
+static ID3D11Device* g_d3d11_device = NULL;
+static ID3D11DeviceContext* g_d3d11_context = NULL;
+static IDXGISwapChain* g_swap_chain = NULL;
+static ID3D11RenderTargetView* g_render_target_view = NULL;
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#define localtime(X) (_X64_or_X86_struct_tm_fallback(X))
+static struct tm* _X64_or_X86_struct_tm_fallback(const time_t* timer) {
+	static struct tm result;
+	localtime_s(&result, timer);
+	return &result;
+}
+#endif
+
+#ifndef _WIN32
+#include <malloc.h>
+#endif
 
 /* Global tracking state instance matching our shared interface declaration */
 CatClock_AppContext ctx = { 0 };
@@ -155,6 +183,10 @@ static void CatClock_NormalizeColorToUniform(SDL_Color src, float dest_array[4])
 }
 
 void ReallocateOffscreenTargets(int w, int h) {
+	/* --- DIAGNOSTIC: Track real incoming allocation metrics --- */
+	printf("[Trace Realloc] Texture Slot Request -> Width: %d | Height: %d\n", w, h);
+	/* ----------------------------------------------------------- */
+
 	if (rt_layer1_backdrop_pass_view.id != SG_INVALID_ID)
 		sg_destroy_view(rt_layer1_backdrop_pass_view);
 	if (rt_layer1_backdrop_sample_view.id != SG_INVALID_ID)
@@ -172,11 +204,17 @@ void ReallocateOffscreenTargets(int w, int h) {
 	rt_layer3_foreground_pass_view.id = rt_layer3_foreground_sample_view.id = SG_INVALID_ID;
 	rt_layer1_backdrop.id = rt_layer3_foreground.id = SG_INVALID_ID;
 
-	sg_image_desc img_desc = { .usage.color_attachment = true,
-							   .width = w,
-							   .height = h,
-							   .pixel_format = SG_PIXELFORMAT_RGBA8,
-							   .label = "RT-Layer1-Static-Backdrop-Texture" };
+	// Calculate target width strictly normalized to the full 128px structural layout stride.
+	// This ensures our offscreen color attachments provide enough padded margin space.
+	float structural_scale = (float) ctx.current_half_steps / 2.0f;
+	int intermediate_stride_w = (int) lroundf(128.0f * structural_scale);
+
+	sg_image_desc img_desc
+		= { .usage.color_attachment = true,
+			.width = intermediate_stride_w, // Bind structural layout width allocation
+			.height = h,
+			.pixel_format = SG_PIXELFORMAT_RGBA8,
+			.label = "RT-Layer1-Static-Backdrop-Texture" };
 	rt_layer1_backdrop = sg_make_image(&img_desc);
 
 	img_desc.label = "RT-Layer3-Static-Foreground-Texture";
@@ -245,38 +283,60 @@ void InitializeOffscreenGenerationPipelines(void) {
 }
 
 void ExecuteOffscreenBakePasses(int w, int h, cb_params_bake_t* uniform_payload) {
-	// Clean, direct layout mapping matching our static layout requirements
+	// Debug telemetry tracking
+	printf("[Bake-Pass Trace] w: %d, h: %d | half_steps: %u (scale: %.2f)\n", w, h,
+		   ctx.current_half_steps, (float) ctx.current_half_steps / 2.0f);
+
 	sg_bindings base_bindings = { 0 };
 	base_bindings.vertex_buffers[0] = ctx.vertex_buffer;
 	base_bindings.index_buffer = ctx.index_buffer;
-	base_bindings.samplers[SMP_sampler_state] = ctx.body_mask_sampler;
-	base_bindings.views[VIEW_texture_sheet]
-		= ctx.body_mask_view; // texture_sheet bound cleanly to slot 0
+	base_bindings.samplers[SMP_main_sampler] = ctx.body_mask_sampler;
+	base_bindings.views[VIEW_texture_sheet] = ctx.body_mask_view;
 
-	sg_pass_action clear_action = { .colors[0] = { .load_action = SG_LOADACTION_CLEAR,
-												   .clear_value = { 0.0f, 0.0f, 0.0f, 0.0f } } };
-	float single_pixel_scale = (float) w / 103.0f;
-	int negative_x_box = (int) lroundf(-23.0f * single_pixel_scale);
-	int full_padded_w = (int) lroundf(128.0f * single_pixel_scale);
+	sg_pass_action clear_action = { 0 };
+	clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
+	clear_action.colors[0].clear_value = (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
+
+	// FIXED geometry spacing anchored entirely to the 128px structural layout stride.
+	// This uncouples offscreen calculations from the variable window parameters.
+	float structural_scale = (float) ctx.current_half_steps / 2.0f;
+	int intermediate_stride_w = (int) lroundf(128.0f * structural_scale);
+
+	// The viewport starts at zero and spans the full width of the 128px target container sheet.
+	// This completely eliminates out-of-bounds rendering scissors on Windows/Direct3D11.
+	int bake_offset_x = 0;
+	int bake_width = intermediate_stride_w;
+
+	printf("[Trace Bake Pass] Native Texture Render Dimension Width: %d\n", intermediate_stride_w);
+	printf("[Trace Bake Pass] Viewport Applied -> X-Offset: %d | Viewport-W: %d\n", bake_offset_x,
+		   bake_width);
 
 	// --- Pass 1: Render Backdrop Target ---
 	uniform_payload->generation_mode_flag = 1;
-	sg_begin_pass(&(sg_pass) { .action = clear_action,
-							   .attachments = { .colors[0] = rt_layer1_backdrop_pass_view } });
+
+	sg_pass backdrop_pass = { 0 };
+	backdrop_pass.action = clear_action;
+	backdrop_pass.attachments.colors[0] = rt_layer1_backdrop_pass_view;
+
+	sg_begin_pass(&backdrop_pass);
 	sg_apply_pipeline(offscreen_bake_pip_backdrop);
 	sg_apply_bindings(&base_bindings);
-	sg_apply_viewport(negative_x_box, 0, full_padded_w, h, true);
+	sg_apply_viewport(bake_offset_x, 0, bake_width, h, true);
 	sg_apply_uniforms(UB_cb_params_bake, &SG_RANGE(*uniform_payload));
 	sg_draw(0, 4, 1);
 	sg_end_pass();
 
 	// --- Pass 2: Render Foreground Target ---
 	uniform_payload->generation_mode_flag = 2;
-	sg_begin_pass(&(sg_pass) { .action = clear_action,
-							   .attachments = { .colors[0] = rt_layer3_foreground_pass_view } });
+
+	sg_pass foreground_pass = { 0 };
+	foreground_pass.action = clear_action;
+	foreground_pass.attachments.colors[0] = rt_layer3_foreground_pass_view;
+
+	sg_begin_pass(&foreground_pass);
 	sg_apply_pipeline(offscreen_bake_pip_foreground);
 	sg_apply_bindings(&base_bindings);
-	sg_apply_viewport(negative_x_box, 0, full_padded_w, h, true);
+	sg_apply_viewport(bake_offset_x, 0, bake_width, h, true);
 	sg_apply_uniforms(UB_cb_params_bake, &SG_RANGE(*uniform_payload));
 	sg_draw(0, 4, 1);
 	sg_end_pass();
@@ -333,6 +393,44 @@ void PackHandUvExtents(float* target_uv_array, int frame_index,
 	target_uv_array[3] = ((row + 1) * c_h) / a_h;
 }
 
+void CatClock_ResizeWindow(SDL_Window* window, int base_w, int base_h, float scale) {
+	/* Calculate target client area size in native screen coordinates */
+	int requested_client_w = (int) lroundf((float) base_w * scale);
+	int requested_client_h = (int) lroundf((float) base_h * scale);
+
+	/* 1. Fire the imperative window frame bounds adjustment */
+	SDL_SetWindowSize(window, requested_client_w, requested_client_h);
+
+#if defined(SOKOL_D3D11)
+	/* 2. TARGET-FENCED SWAPCHAIN SYNCHRONIZATION:
+	 * Direct3D11 requires the physical backbuffer to scale cleanly with the window frame.
+	 * If we don't resize the buffers here, DXGI stretches a stale 1x surface,
+	 * causing the exponential double-scaling and body outline truncation bugs! */
+	if (g_swap_chain) {
+		/* Release the active render target view reference before changing sizes */
+		if (g_render_target_view) {
+			g_render_target_view->lpVtbl->Release(g_render_target_view);
+			g_render_target_view = NULL;
+		}
+
+		/* Manually force DXGI to recreate the backbuffer to match the true physical window pixels
+		 */
+		g_swap_chain->lpVtbl->ResizeBuffers(g_swap_chain, 1, requested_client_w, requested_client_h,
+											DXGI_FORMAT_R8G8B8A8_UNORM, 0);
+
+		/* Query and re-link the fresh backbuffer reference safely */
+		ID3D11Texture2D* back_buffer = NULL;
+		HRESULT hr = g_swap_chain->lpVtbl->GetBuffer(g_swap_chain, 0, &IID_ID3D11Texture2D,
+													 (void**) &back_buffer);
+		if (SUCCEEDED(hr) && back_buffer) {
+			g_d3d11_device->lpVtbl->CreateRenderTargetView(
+				g_d3d11_device, (ID3D11Resource*) back_buffer, NULL, &g_render_target_view);
+			back_buffer->lpVtbl->Release(back_buffer);
+		}
+	}
+#endif
+}
+
 int main(int argc, char* argv[]) {
 	printf("[Trace] Starting App Transition Runtime Execution Context.\n");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -371,6 +469,21 @@ int main(int argc, char* argv[]) {
 
 	SDL_SetWindowHitTest(ctx.window, WidgetWindowHitTest, NULL);
 
+#ifdef _WIN32
+	if (ctx.use_decorations) {
+		SDL_PropertiesID window_props = SDL_GetWindowProperties(ctx.window);
+		HWND hwnd
+			= (HWND) SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+		if (hwnd) {
+			LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+			style &= ~(WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
+			SetWindowLongPtr(hwnd, GWL_STYLE, style);
+			SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+						 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+		}
+	}
+#endif
+
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
@@ -386,7 +499,75 @@ int main(int argc, char* argv[]) {
 
 	sg_desc sokol_description
 		= { .logger.func = slog_func,
-			.environment = { .defaults = { .color_format = SG_PIXELFORMAT_RGBA8 } } };
+			.environment = { .defaults = { .color_format = SG_PIXELFORMAT_RGBA8,
+										   .depth_format = SG_PIXELFORMAT_NONE } } };
+
+#if defined(SOKOL_D3D11)
+	/* 1. Allocate a visible tracking console frame on Windows */
+	AllocConsole();
+	freopen("CONOUT$", "w", stdout);
+	freopen("CONOUT$", "w", stderr);
+	setvbuf(stdout, NULL, _IONBF, 0); // Force unbuffered stdout streaming
+
+	printf("\n========================================================\n");
+	printf("   SOKOL DIRECTX HARDWARE DEBUGGING CONSOLE STAGE\n");
+	printf("========================================================\n");
+
+	SDL_PropertiesID win_props = SDL_GetWindowProperties(ctx.window);
+	if (win_props) {
+		HWND hwnd = (HWND) SDL_GetPointerProperty(win_props, "SDL.window.win32.hwnd", NULL);
+		if (hwnd) {
+			DXGI_SWAP_CHAIN_DESC scd;
+			memset(&scd, 0, sizeof(scd));
+			scd.BufferCount = 1;
+			scd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			scd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+			scd.OutputWindow = hwnd;
+			scd.SampleDesc.Count = 1;
+			scd.Windowed = TRUE;
+
+			D3D_FEATURE_LEVEL feature_level = (D3D_FEATURE_LEVEL) 0;
+			D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
+										   D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
+
+			/* 2. INJECT D3D11_CREATE_DEVICE_DEBUG FLAG TO FORCE HARDWARE VALIDATION LAYER CHANNELS
+			 */
+			UINT createDeviceFlags = 0;
+#if defined(DEBUG) || !defined(NDEBUG)
+			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+			printf(
+				"[Debug Subsystem] Attempting to hook native OS validation layer components...\n");
+#endif
+
+			HRESULT hr = D3D11CreateDeviceAndSwapChain(
+				NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, levels, 4,
+				D3D11_SDK_VERSION, &scd, &g_swap_chain, &g_d3d11_device, &feature_level,
+				&g_d3d11_context);
+
+			printf("[D3D11 Base Initialization Status]: HRESULT = 0x%08X\n", (unsigned int) hr);
+			if (SUCCEEDED(hr) && g_d3d11_device && g_d3d11_context) {
+				sokol_description.environment.d3d11.device = g_d3d11_device;
+				sokol_description.environment.d3d11.device_context = g_d3d11_context;
+
+				ID3D11Texture2D* back_buffer = NULL;
+				hr = g_swap_chain->lpVtbl->GetBuffer(g_swap_chain, 0, &IID_ID3D11Texture2D,
+													 (void**) &back_buffer);
+				printf("[Swapchain Backbuffer Query Status]: HRESULT = 0x%08X\n",
+					   (unsigned int) hr);
+
+				if (SUCCEEDED(hr) && back_buffer) {
+					hr = g_d3d11_device->lpVtbl->CreateRenderTargetView(
+						g_d3d11_device, (ID3D11Resource*) back_buffer, NULL, &g_render_target_view);
+					printf("[Render Target View Creation Status]: HRESULT = 0x%08X | Pointer: %p\n",
+						   (unsigned int) hr, (void*) g_render_target_view);
+					back_buffer->lpVtbl->Release(back_buffer);
+				}
+			}
+		}
+	}
+	printf("========================================================\n\n");
+#endif
+
 	sg_setup(&sokol_description);
 
 	if (!sg_isvalid()) {
@@ -425,15 +606,36 @@ int main(int argc, char* argv[]) {
 		   (int) (baseline_w * current_scale), (int) (baseline_h * current_scale));
 	printf("[Diagnostic Metrics] =====================================\n\n");
 
+#if defined(SOKOL_GLCORE)
+	// OpenGL / Linux Layout: Flip UV coordinates vertically (1 -> 0, 0 -> 1)
+	// to properly compensate for OpenGL's bottom-left framebuffer texture origin.
 	CatClock_GpuVertex clock_vertices[] = { { .pos = { -1.0f, 1.0f }, .uv = { 0.0f, 0.0f } },
 											{ .pos = { 1.0f, 1.0f }, .uv = { 1.0f, 0.0f } },
 											{ .pos = { -1.0f, -1.0f }, .uv = { 0.0f, 1.0f } },
 											{ .pos = { 1.0f, -1.0f }, .uv = { 1.0f, 1.0f } } };
+#else
+	// Direct3D11 / Windows Layout: Original working native top-left coordinate system mappings
+	CatClock_GpuVertex clock_vertices[] = { { .pos = { -1.0f, 1.0f }, .uv = { 0.0f, 0.0f } },
+											{ .pos = { 1.0f, 1.0f }, .uv = { 1.0f, 0.0f } },
+											{ .pos = { -1.0f, -1.0f }, .uv = { 0.0f, 1.0f } },
+											{ .pos = { 1.0f, -1.0f }, .uv = { 1.0f, 1.0f } } };
+#endif
+
 	uint16_t clock_indices[] = { 0, 1, 2, 3 };
 
 	ctx.vertex_buffer = sg_make_buffer(
 		&(sg_buffer_desc) { .data = { .ptr = clock_vertices, .size = sizeof(clock_vertices) },
 							.label = "ClockMeshVertexBuffer" });
+
+	/* --- RUNTIME VERTEX GEOMETRY MONITOR --- */
+	printf("\n[Geometry Trace] --- Active Presentation Quad Map ---\n");
+	for (int i = 0; i < 4; i++) {
+		printf("  Vertex [%d] -> Pos: (%.2f, %.2f) | UV: (%.2f, %.2f)\n", i,
+			   clock_vertices[i].pos[0], clock_vertices[i].pos[1], clock_vertices[i].uv[0],
+			   clock_vertices[i].uv[1]);
+	}
+	printf("[Geometry Trace] ------------------------------------\n\n");
+	/* ---------------------------------------- */
 
 	ctx.index_buffer = sg_make_buffer(
 		&(sg_buffer_desc) { .usage = { .index_buffer = true },
@@ -459,6 +661,43 @@ int main(int argc, char* argv[]) {
 // =========================================================================
 // STAGING PIXELS DIAGNOSTIC DUMP FOR HARDWARE BUFFER VERIFICATION
 // =========================================================================
+#define TRACE_PIXEL_INTEGRITY
+#ifdef TRACE_PIXEL_INTEGRITY
+	{
+		long long body_count = 0, tie_count = 0, white_count = 0, eyes_count = 0;
+		uint32_t* audit_pixels
+			= (uint32_t*) malloc(VRAM_TEX_WIDTH * VRAM_TEX_HEIGHT * sizeof(uint32_t));
+
+		if (audit_pixels) {
+			/* Sample the exact state of the staging canvas backing payload */
+			CatClock_UnpackStaticAssetsToStagingBuffer(audit_pixels, catback_ptr, tie_ptr,
+													   catwhite_ptr, eyes_ptr);
+
+			for (int y = 0; y < VRAM_TEX_HEIGHT; y++) {
+				for (int x = 0; x < VRAM_TEX_WIDTH; x++) {
+					uint32_t raw_pixel = audit_pixels[y * VRAM_TEX_WIDTH + x];
+					if (raw_pixel & 0xFF)
+						body_count++; /* R Channel */
+					if ((raw_pixel >> 8) & 0xFF)
+						tie_count++; /* G Channel */
+					if ((raw_pixel >> 16) & 0xFF)
+						white_count++; /* B Channel */
+					if ((raw_pixel >> 24) & 0xFF)
+						eyes_count++; /* A Channel */
+				}
+			}
+			free(audit_pixels);
+
+			printf("[VRAM Matrix Monitor] Scale Step: %u | Active Layout Footprint Counts:\n",
+				   ctx.current_half_steps);
+			printf("  -> Body Pixel Count  : %lld\n", body_count);
+			printf("  -> Tie Pixel Count   : %lld\n", tie_count);
+			printf("  -> White Pixel Count : %lld\n", white_count);
+			printf("  -> Eyes Pixel Count  : %lld\n", eyes_count);
+		}
+	}
+#endif
+
 #ifdef DEBUG_DUMP_STAGING_PIXELS
 	{
 		FILE* audit_dump = fopen("vram_static_staging_dump.pam", "wb");
@@ -629,52 +868,85 @@ int main(int argc, char* argv[]) {
 		Uint64 frame_start_ticks = SDL_GetTicks();
 
 		while (SDL_PollEvent(&event)) {
-			if (event.type == SDL_EVENT_QUIT) {
+			switch (event.type) {
+			case SDL_EVENT_QUIT:
 				running = false;
-			} else if (event.type == SDL_EVENT_KEY_DOWN) {
-				if (event.key.key == SDLK_ESCAPE) {
+				break;
+
+			case SDL_EVENT_KEY_DOWN:
+				if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_Q) {
 					running = false;
-					break;
 				}
-				uint32_t old_steps = ctx.current_half_steps;
-				if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_KP_PLUS) {
-					if (ctx.current_half_steps < 20)
-						ctx.current_half_steps++;
-				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS) {
-					if (ctx.current_half_steps > 1)
-						ctx.current_half_steps--;
-				}
-				if (ctx.current_half_steps != old_steps) {
+				/* FIXED: Dual check both the alphanumeric row keys, keypad items, and physical
+				   hardware scancodes */
+				else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS
+						 || event.key.key == SDLK_KP_PLUS
+						 || event.key.scancode == SDL_SCANCODE_EQUALS) {
+					ctx.current_half_steps++;
 					ctx.texture_cache_stale = true;
 					float updated_scale = (float) ctx.current_half_steps / 2.0f;
-					SDL_SetWindowSize(ctx.window, (int) lroundf(baseline_w * updated_scale),
-									  (int) lroundf(baseline_h * updated_scale));
+					CatClock_ResizeWindow(ctx.window, baseline_w, baseline_h, updated_scale);
+
+					// --- STABILIZATION TRIGGER ---
+					active_viewport_w = (int) lroundf(baseline_w * updated_scale);
+					active_viewport_h = (int) lroundf(baseline_h * updated_scale);
+					ReallocateOffscreenTargets(active_viewport_w, active_viewport_h);
+					// -----------------------------
+
 					force_redraw = true;
+				} else if (event.key.key == SDLK_MINUS || event.key.key == SDLK_KP_MINUS
+						   || event.key.scancode == SDL_SCANCODE_MINUS) {
+					if (ctx.current_half_steps > 1) {
+						ctx.current_half_steps--;
+						ctx.texture_cache_stale = true;
+						float updated_scale = (float) ctx.current_half_steps / 2.0f;
+						CatClock_ResizeWindow(ctx.window, baseline_w, baseline_h, updated_scale);
+
+						// --- STABILIZATION TRIGGER ---
+						active_viewport_w = (int) lroundf(baseline_w * updated_scale);
+						active_viewport_h = (int) lroundf(baseline_h * updated_scale);
+						ReallocateOffscreenTargets(active_viewport_w, active_viewport_h);
+						// -----------------------------
+
+						force_redraw = true;
+					}
 				}
-			} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
-				uint32_t old_steps = ctx.current_half_steps;
+
+				break;
+
+			case SDL_EVENT_MOUSE_WHEEL:
 				if (event.wheel.y > 0.0f) {
-					if (ctx.current_half_steps < 20)
-						ctx.current_half_steps++;
-				} else if (event.wheel.y < 0.0f) {
-					if (ctx.current_half_steps > 1)
-						ctx.current_half_steps--;
-				}
-				if (ctx.current_half_steps != old_steps) {
+					ctx.current_half_steps++;
 					ctx.texture_cache_stale = true;
 					float updated_scale = (float) ctx.current_half_steps / 2.0f;
-					SDL_SetWindowSize(ctx.window, (int) lroundf(baseline_w * updated_scale),
-									  (int) lroundf(baseline_h * updated_scale));
+					CatClock_ResizeWindow(ctx.window, baseline_w, baseline_h, updated_scale);
+
+					// --- STABILIZATION TRIGGER ---
+					active_viewport_w = (int) lroundf(baseline_w * updated_scale);
+					active_viewport_h = (int) lroundf(baseline_h * updated_scale);
+					ReallocateOffscreenTargets(active_viewport_w, active_viewport_h);
+					// -----------------------------
+
 					force_redraw = true;
+				} else if (event.wheel.y < 0.0f) {
+					if (ctx.current_half_steps > 1) {
+						ctx.current_half_steps--;
+						ctx.texture_cache_stale = true;
+						float updated_scale = (float) ctx.current_half_steps / 2.0f;
+						CatClock_ResizeWindow(ctx.window, baseline_w, baseline_h, updated_scale);
+
+						// --- STABILIZATION TRIGGER ---
+						active_viewport_w = (int) lroundf(baseline_w * updated_scale);
+						active_viewport_h = (int) lroundf(baseline_h * updated_scale);
+						ReallocateOffscreenTargets(active_viewport_w, active_viewport_h);
+						// -----------------------------
+
+						force_redraw = true;
+					}
 				}
-			} else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-				active_viewport_w = event.window.data1;
-				active_viewport_h = event.window.data2;
-				ctx.texture_cache_stale = true;
-				force_redraw = true;
-			} else if (event.type == SDL_EVENT_WINDOW_EXPOSED
-					   || event.type == SDL_EVENT_WINDOW_SHOWN) {
-				force_redraw = true;
+				break;
+			default:
+				break;
 			}
 		}
 
@@ -689,7 +961,7 @@ int main(int argc, char* argv[]) {
 				continue;
 			}
 
-			cb_params_bake_t bake_uniform_payload;
+			static cb_params_bake_t bake_uniform_payload;
 			memset(&bake_uniform_payload, 0, sizeof(cb_params_bake_t));
 
 			static Uint64 baseline_ticks = 0;
@@ -772,7 +1044,6 @@ int main(int argc, char* argv[]) {
 										   &bake_uniform_payload);
 				ctx.texture_cache_stale = false;
 			}
-
 			cb_tail_params_t tail_payload;
 			memset(&tail_payload, 0, sizeof(cb_tail_params_t));
 			tail_payload.tail_frame = pendulum_frame_idx;
@@ -798,6 +1069,7 @@ int main(int argc, char* argv[]) {
 			// =========================================================================
 			// RECORD AND DISPATCH GRAPHICS PIPELINE COMMANDS (PURE TEXTURE SHUFFLING)
 			// =========================================================================
+
 			sg_pass_action clock_pass_clear_action = { 0 };
 			clock_pass_clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
 			clock_pass_clear_action.colors[0].clear_value = (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -807,62 +1079,77 @@ int main(int argc, char* argv[]) {
 			swapchain_pass.swapchain.width = active_viewport_w;
 			swapchain_pass.swapchain.height = active_viewport_h;
 
+#if defined(SOKOL_D3D11)
+			swapchain_pass.swapchain.sample_count = 1;
+			swapchain_pass.swapchain.color_format = SG_PIXELFORMAT_RGBA8;
+			swapchain_pass.swapchain.d3d11.render_view = (const void*) g_render_target_view;
+#endif
+
 			sg_begin_pass(&swapchain_pass);
 
 			// Base bindings setup matching standard engine layout arrays
-			sg_bindings clock_resource_bindings = { 0 };
-			clock_resource_bindings.vertex_buffers[0] = ctx.vertex_buffer;
-			clock_resource_bindings.index_buffer = ctx.index_buffer;
-			clock_resource_bindings.samplers[SMP_sampler_state] = ctx.body_mask_sampler;
-			clock_resource_bindings.views[VIEW_texture_sheet] = ctx.body_mask_view;
-			clock_resource_bindings.views[VIEW_hours_hand_sheet] = hours_atlas_view_slot;
-			clock_resource_bindings.views[VIEW_mins_hand_sheet] = minutes_atlas_view_slot;
-			clock_resource_bindings.views[VIEW_seconds_hand_sheet] = seconds_atlas_view_slot;
-			clock_resource_bindings.views[VIEW_eyes_sheet] = eyes_atlas_view_slot;
-			clock_resource_bindings.views[VIEW_tail_sheet] = tail_atlas_view_slot;
+			sg_bindings base_bindings = { 0 };
+			base_bindings.vertex_buffers[0] = ctx.vertex_buffer;
+			base_bindings.index_buffer = ctx.index_buffer;
+			base_bindings.samplers[SMP_main_sampler] = ctx.body_mask_sampler;
+			base_bindings.views[VIEW_texture_sheet] = ctx.body_mask_view;
+			base_bindings.views[VIEW_hours_hand_sheet] = hours_atlas_view_slot;
+			base_bindings.views[VIEW_mins_hand_sheet] = minutes_atlas_view_slot;
+			base_bindings.views[VIEW_seconds_hand_sheet] = seconds_atlas_view_slot;
+			base_bindings.views[VIEW_eyes_sheet] = eyes_atlas_view_slot;
+			base_bindings.views[VIEW_tail_sheet] = tail_atlas_view_slot;
 
-			// --- LAYER 1: Render the white backdrop outline halo ---
-			// Pass standard upright mapping to slot registers
-			clock_resource_bindings.views[VIEW_rt_backdrop_tex] = rt_layer1_backdrop_sample_view;
-			clock_resource_bindings.views[VIEW_rt_foreground_tex] = rt_layer1_backdrop_sample_view;
+			// Calculate presentation parameters matching your structural 128px asset rules
+			float presentation_scale = (float) ctx.current_half_steps / 2.0f;
+			int wide_layout_offset_x = (int) lroundf(-23.0f * presentation_scale);
+			int wide_layout_width = (int) lroundf(128.0f * presentation_scale);
 
+			// =========================================================================
+			// --- LAYER 1: Body Outline (Lowest Level) ---
+			// =========================================================================
+			base_bindings.views[VIEW_rt_backdrop_tex] = rt_layer1_backdrop_sample_view;
+			base_bindings.views[VIEW_rt_foreground_tex] = rt_layer1_backdrop_sample_view;
 			sg_apply_pipeline(ctx.draw_pipeline);
-			sg_apply_bindings(&clock_resource_bindings);
-			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
+			sg_apply_bindings(&base_bindings);
+
+			// Shift the wide canvas layout left to position it within the window bounds
+			sg_apply_viewport(wide_layout_offset_x, 0, wide_layout_width, active_viewport_h, true);
 			sg_draw(0, 4, 1);
 
-			// --- LAYER 2: Render the tail unscaled halo and dynamic swinging mass ---
+			// =========================================================================
+			// --- LAYERS 2 & 3: Tail Outline, then Tail (Middle Stack) ---
+			// =========================================================================
 			sg_apply_pipeline(draw_tail_pipeline);
-			sg_apply_bindings(&clock_resource_bindings);
+			sg_apply_bindings(&base_bindings);
+
+			// Stays anchored 1:1 to the native window frame boundaries
 			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
 			sg_apply_uniforms(UB_cb_tail_params, &SG_RANGE(tail_payload));
 			sg_draw(0, 4, 1);
 
-			// --- LAYER 3: Render the solid cat body foreground layer ---
-			// FIXED: Feed the foreground target into both sampling slots to draw it upright
-			clock_resource_bindings.views[VIEW_rt_backdrop_tex] = rt_layer3_foreground_sample_view;
-			clock_resource_bindings.views[VIEW_rt_foreground_tex]
-				= rt_layer3_foreground_sample_view;
-
+			// ========================================================
+			// --- LAYER 4: Body (Highest Layer) ---
+			// ========================================================
+			base_bindings.views[VIEW_rt_backdrop_tex] = rt_layer3_foreground_sample_view;
+			base_bindings.views[VIEW_rt_foreground_tex] = rt_layer3_foreground_sample_view;
 			sg_apply_pipeline(ctx.draw_pipeline);
-			sg_apply_bindings(&clock_resource_bindings);
-			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
+			sg_apply_bindings(&base_bindings);
+
+			// Apply matching layout metrics to center the body torso torso core
+			sg_apply_viewport(wide_layout_offset_x, 0, wide_layout_width, active_viewport_h, true);
 			sg_draw(0, 4, 1);
 
-			// --- LAYER 4: Composite secondary dynamic facial layers (Eyes & Hands) ---
-			// Restore clean baseline reference views for subsequent screen draws
-			clock_resource_bindings.views[VIEW_rt_backdrop_tex] = rt_layer1_backdrop_sample_view;
-			clock_resource_bindings.views[VIEW_rt_foreground_tex]
-				= rt_layer3_foreground_sample_view;
-
+			// ========================================================
+			// --- OVERLAYS: Dynamic Facial Features (Eyes & Hands) ---
+			// ========================================================
 			sg_apply_pipeline(draw_pupils_pipeline);
-			sg_apply_bindings(&clock_resource_bindings);
+			sg_apply_bindings(&base_bindings);
 			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
 			sg_apply_uniforms(UB_cb_pupil_params, &SG_RANGE(pupil_payload));
 			sg_draw(0, 4, 1);
 
 			sg_apply_pipeline(draw_hands_pipeline);
-			sg_apply_bindings(&clock_resource_bindings);
+			sg_apply_bindings(&base_bindings);
 			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
 			sg_apply_uniforms(UB_cb_hands_params, &SG_RANGE(hands_payload));
 			sg_draw(0, 4, 1);
@@ -870,7 +1157,16 @@ int main(int argc, char* argv[]) {
 			sg_end_pass();
 			sg_commit();
 
+#if defined(SOKOL_D3D11)
+			if (g_swap_chain) {
+				/* PRESENT INSTANTLY: Strips DXGI of VSync pacing authority to allow manual loop
+				 * master timing */
+				g_swap_chain->lpVtbl->Present(g_swap_chain, 0, DXGI_PRESENT_DO_NOT_WAIT);
+			}
+#else
+			/* OpenGL handles standard context swaps natively on Linux/Unix */
 			SDL_GL_SwapWindow(ctx.window);
+#endif
 		}
 
 		Uint64 loop_execution_duration = SDL_GetTicks() - frame_start_ticks;

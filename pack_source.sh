@@ -3,7 +3,7 @@ set -e
 
 output_pdf="catclock_repository_dump.pdf"
 file_targets="*.[ch] ./shaders/*.[ch] ./shaders/*.glsl"
-file_nontargets="catclock_shaders.h"
+file_nontargets="catclock_shaders_d3d11.h catclock_shaders_gl.h"
 
 tmp_payload=$(mktemp)
 tmp_text_blocks=$(mktemp)

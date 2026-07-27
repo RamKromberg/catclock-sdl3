@@ -29,7 +29,7 @@
  * to standard output. Retained entirely to serve as core user-facing documentation.
  */
 void PrintHelpDocumentation(const char* program_name) {
-	printf("Kit-Cat Desktop Widget Clock (SDL3 Engine Re-Port)\n");
+	printf("Kit-Cat Desktop Widget Clock (SDL3, Sokol and Freetype Port)\n");
 	printf("https://github.com/RamKromberg/catclock-sdl3\n");
 	printf("Usage: %s [flags]\n\n", program_name);
 	printf("Available Flags:\n");

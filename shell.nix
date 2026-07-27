@@ -3,15 +3,15 @@
 let
   windowsPkgs = pkgs.pkgsCross.mingwW64;
 
-  # The June 22, 2026 Runtime Engine Source Tree
+  # 2026-07-29 Runtime Engine Source Tree
   sokolSrc = pkgs.fetchFromGitHub {
     owner = "floooh";
     repo = "sokol";
-    rev = "28f9d8d44d92dab8536791a9f7d13d7e911a2b39";
-    sha256 = "sha256-2KdUPf0ceUeh8Fd+VDoOdJKmE6ZjjZnW8S5apDxniDk=";
+    rev = "f26aaf6deeee5a4a07d83f3cd7151516bafa09ad";
+    sha256 = "sha256-qhvjnC6qn14SBsq39efZrCfpIgKPZBnteMBINDssf9c=";
   };
 
-  # The June 13, 2026 Static Compiler Tool Binary Extraction Derivation
+  # 2026-07-11 Static Compiler Tool Binary Extraction Derivation
   sokolCompiler = pkgs.stdenv.mkDerivation {
     pname = "sokol-shdc";
     version = "2026-06-13";
@@ -19,8 +19,8 @@ let
     src = pkgs.fetchFromGitHub {
       owner = "floooh";
       repo = "sokol-tools-bin";
-      rev = "b1cdec93b99496f41f3862d1d84f8fe2f96f2fb3";
-      sha256 = "sha256-QOi09ZjxfzF1aokfFsIWY56aKCSMkwXuGZ/F6mWZ/8A=";
+      rev = "9adef5465d8b9e7f412b0ffd48017e2741628c27";
+      sha256 = "sha256-WySvVT2rDfWIHcKqz/niVkNpbdPEWsr33k1VyoaRJ/A=";
     };
 
     dontBuild = true;
@@ -32,12 +32,6 @@ let
       chmod +x $out/bin/sokol-shdc
     '';
   };
-
-  my-python-env = pkgs.python3.withPackages (ps: with ps; [
-    opencv4
-    numpy
-    scipy
-  ]); # precompute_clockface: approximate the clockface lame curve and bake it into the c source instead of wasting cycles on it during pre-bake/live rendering
 in
 
 pkgs.mkShell {
@@ -62,14 +56,12 @@ pkgs.mkShell {
     #nvtopPackages.full
     #intel-gpu-tools
     #amdgpu_top
-    my-python-env
     sdl3
     sokolCompiler
     glsl_analyzer # formatter. use `#pragma sokol` to prefix sokol tags ( https://github.com/floooh/sokol-tools/blob/master/docs/sokol-shdc.md )
     libGL.dev libGL libGLU
     libx11.dev
     wayland.dev
-    freetype
   ];
 
   buildInputs = [
@@ -88,6 +80,19 @@ pkgs.mkShell {
     # $ FAKETIME="2026-01-01 12:45:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:45:00" xclock
     # $ FAKETIME="2026-01-01 12:50:00" ./catclock-sdl3 & FAKETIME="2026-01-01 12:50:00" xclock
     
+    # Automated Flat Standalone Extraction Pass
+    mkdir -p ./freetype
+    SRC_TARBALL="${pkgs.freetype.src}"
+    if [ ! -f ./freetype/ftgrays.c ]; then
+      echo "Extracting detached micro-rasterizer assets..."
+      TMP_UNPACK=$(mktemp -d)
+      tar -xf "$SRC_TARBALL" -C "$TMP_UNPACK" --strip-components=1
+      cp "$TMP_UNPACK/src/smooth/ftgrays.c" ./freetype/ftgrays.c
+      cp "$TMP_UNPACK/src/smooth/ftgrays.h" ./freetype/ftgrays.h
+      cp "$TMP_UNPACK/include/freetype/ftimage.h" ./freetype/ftimage.h
+      rm -rf "$TMP_UNPACK"
+    fi
+
     export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [
       pkgs.libGL
       pkgs.glib
@@ -107,9 +112,7 @@ pkgs.mkShell {
     export LD_PRELOAD="${pkgs.libfaketime}/lib/libfaketime.so.1"
 
     export WINDOWS_SDL_PREFIX="${windowsPkgs.sdl3}"
-
-    # Capture the runtime package path where the real Windows DLL lives
-    export WINDOWS_SDL_BIN="${windowsPkgs.sdl3.bin or windowsPkgs.sdl3}"
+    export WINDOWS_SDL_OUT="${windowsPkgs.sdl3.out}"
 
     echo "=================================================="
     echo " Kit-Cat Clock Cross-Platform Compiler Shell Active "
