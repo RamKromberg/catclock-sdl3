@@ -224,7 +224,7 @@ void Triangle_ApplyMiterSharpenerTip(int phase_idx, float scale, const gl_Vertex
 		projected_fixed_y = uncomp_vertices->y + push_y;
 		target_x = projected_fixed_x >> 8;
 		target_y = projected_fixed_y >> 8;
-		// FIX: Ensure neutral axes stay zeroed out to prevent off-by-one directional drift
+		// Ensure neutral axes stay zeroed out to prevent off-by-one directional drift
 		hand_sgn_x = (master_dx > 0) ? 1 : ((master_dx < 0) ? -1 : 0);
 		hand_sgn_y = (master_dy > 0) ? 1 : ((master_dy < 0) ? -1 : 0);
 

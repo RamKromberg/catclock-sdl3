@@ -98,7 +98,8 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 /* System Asset Automated Blueprint Dumps System */
 /* STAGE 2: Force disk dumps to overwrite whenever texture cache state transitions */
 #ifdef DEBUG_DUMP_ATLAS
-		if (cell_base_w == 64 && cell_base_h == 96 && total_frames == TOTAL_HAND_PHASES) {
+		if (cell_base_w == HAND_CELL_W && cell_base_h == HAND_CELL_H
+			&& total_frames == TOTAL_HAND_PHASES) {
 			struct {
 				int type;
 				SDL_Color color;
@@ -113,10 +114,10 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
 													atlas->atlas_w, atlas->atlas_h);
 			}
-		} else if (cell_base_w == 64 && cell_base_h == 32) {
+		} else if (cell_base_w == EYES_CELL_W && cell_base_h == EYES_CELL_H) {
 			CatClock_DebugDumpGenericAtlasToPam("dump_eyes_atlas.pam", atlas->index_buffer,
 												atlas->atlas_w, atlas->atlas_h);
-		} else if (cell_base_w == 96 && cell_base_h == 96) {
+		} else if (cell_base_w == TAIL_CELL_W && cell_base_h == TAIL_CELL_H) {
 			struct {
 				void* app;
 				float ox;

@@ -183,10 +183,7 @@ static void CatClock_NormalizeColorToUniform(SDL_Color src, float dest_array[4])
 }
 
 void ReallocateOffscreenTargets(int w, int h) {
-	/* --- DIAGNOSTIC: Track real incoming allocation metrics --- */
-	printf("[Trace Realloc] Texture Slot Request -> Width: %d | Height: %d\n", w, h);
-	/* ----------------------------------------------------------- */
-
+	(void) w;
 	if (rt_layer1_backdrop_pass_view.id != SG_INVALID_ID)
 		sg_destroy_view(rt_layer1_backdrop_pass_view);
 	if (rt_layer1_backdrop_sample_view.id != SG_INVALID_ID)
@@ -283,10 +280,7 @@ void InitializeOffscreenGenerationPipelines(void) {
 }
 
 void ExecuteOffscreenBakePasses(int w, int h, cb_params_bake_t* uniform_payload) {
-	// Debug telemetry tracking
-	printf("[Bake-Pass Trace] w: %d, h: %d | half_steps: %u (scale: %.2f)\n", w, h,
-		   ctx.current_half_steps, (float) ctx.current_half_steps / 2.0f);
-
+	(void) w;
 	sg_bindings base_bindings = { 0 };
 	base_bindings.vertex_buffers[0] = ctx.vertex_buffer;
 	base_bindings.index_buffer = ctx.index_buffer;
@@ -297,7 +291,7 @@ void ExecuteOffscreenBakePasses(int w, int h, cb_params_bake_t* uniform_payload)
 	clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
 	clear_action.colors[0].clear_value = (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
 
-	// FIXED geometry spacing anchored entirely to the 128px structural layout stride.
+	// The geometry spacing is anchored entirely to the 128px structural layout stride.
 	// This uncouples offscreen calculations from the variable window parameters.
 	float structural_scale = (float) ctx.current_half_steps / 2.0f;
 	int intermediate_stride_w = (int) lroundf(128.0f * structural_scale);
@@ -306,10 +300,6 @@ void ExecuteOffscreenBakePasses(int w, int h, cb_params_bake_t* uniform_payload)
 	// This completely eliminates out-of-bounds rendering scissors on Windows/Direct3D11.
 	int bake_offset_x = 0;
 	int bake_width = intermediate_stride_w;
-
-	printf("[Trace Bake Pass] Native Texture Render Dimension Width: %d\n", intermediate_stride_w);
-	printf("[Trace Bake Pass] Viewport Applied -> X-Offset: %d | Viewport-W: %d\n", bake_offset_x,
-		   bake_width);
 
 	// --- Pass 1: Render Backdrop Target ---
 	uniform_payload->generation_mode_flag = 1;
@@ -432,7 +422,6 @@ void CatClock_ResizeWindow(SDL_Window* window, int base_w, int base_h, float sca
 }
 
 int main(int argc, char* argv[]) {
-	printf("[Trace] Starting App Transition Runtime Execution Context.\n");
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		fprintf(stderr, "[Fatal Error] SDL_Init subsystem initialization failure.\n");
 		return 1;
@@ -445,8 +434,8 @@ int main(int argc, char* argv[]) {
 	SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
 #endif
 
-	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f;
-	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : 288.0f;
+	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W;
+	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H;
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int target_w = (int) lroundf(baseline_w * scale);
 	int target_h = (int) lroundf(baseline_h * scale);
@@ -459,7 +448,6 @@ int main(int argc, char* argv[]) {
 		window_flags |= SDL_WINDOW_ALWAYS_ON_TOP;
 	}
 
-	printf("[Trace] Spawning System Widget Context at Dimensions: %dx%d\n", target_w, target_h);
 	ctx.window = SDL_CreateWindow("CatClock-SDL3 Widget Core", target_w, target_h, window_flags);
 	if (!ctx.window) {
 		fprintf(stderr, "[Fatal Error] Host Window abstraction layer failed to map.\n");
@@ -503,6 +491,7 @@ int main(int argc, char* argv[]) {
 										   .depth_format = SG_PIXELFORMAT_NONE } } };
 
 #if defined(SOKOL_D3D11)
+#if defined(DEBUG)
 	/* 1. Allocate a visible tracking console frame on Windows */
 	AllocConsole();
 	freopen("CONOUT$", "w", stdout);
@@ -512,6 +501,7 @@ int main(int argc, char* argv[]) {
 	printf("\n========================================================\n");
 	printf("   SOKOL DIRECTX HARDWARE DEBUGGING CONSOLE STAGE\n");
 	printf("========================================================\n");
+#endif
 
 	SDL_PropertiesID win_props = SDL_GetWindowProperties(ctx.window);
 	if (win_props) {
@@ -533,7 +523,7 @@ int main(int argc, char* argv[]) {
 			/* 2. INJECT D3D11_CREATE_DEVICE_DEBUG FLAG TO FORCE HARDWARE VALIDATION LAYER CHANNELS
 			 */
 			UINT createDeviceFlags = 0;
-#if defined(DEBUG) || !defined(NDEBUG)
+#if defined(DEBUG)
 			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
 			printf(
 				"[Debug Subsystem] Attempting to hook native OS validation layer components...\n");
@@ -543,8 +533,9 @@ int main(int argc, char* argv[]) {
 				NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, levels, 4,
 				D3D11_SDK_VERSION, &scd, &g_swap_chain, &g_d3d11_device, &feature_level,
 				&g_d3d11_context);
-
+#if defined(DEBUG)
 			printf("[D3D11 Base Initialization Status]: HRESULT = 0x%08X\n", (unsigned int) hr);
+#endif
 			if (SUCCEEDED(hr) && g_d3d11_device && g_d3d11_context) {
 				sokol_description.environment.d3d11.device = g_d3d11_device;
 				sokol_description.environment.d3d11.device_context = g_d3d11_context;
@@ -552,20 +543,26 @@ int main(int argc, char* argv[]) {
 				ID3D11Texture2D* back_buffer = NULL;
 				hr = g_swap_chain->lpVtbl->GetBuffer(g_swap_chain, 0, &IID_ID3D11Texture2D,
 													 (void**) &back_buffer);
+#if defined(DEBUG)
 				printf("[Swapchain Backbuffer Query Status]: HRESULT = 0x%08X\n",
 					   (unsigned int) hr);
+#endif
 
 				if (SUCCEEDED(hr) && back_buffer) {
 					hr = g_d3d11_device->lpVtbl->CreateRenderTargetView(
 						g_d3d11_device, (ID3D11Resource*) back_buffer, NULL, &g_render_target_view);
+#if defined(DEBUG)
 					printf("[Render Target View Creation Status]: HRESULT = 0x%08X | Pointer: %p\n",
 						   (unsigned int) hr, (void*) g_render_target_view);
+#endif
 					back_buffer->lpVtbl->Release(back_buffer);
 				}
 			}
 		}
 	}
+#if defined(DEBUG)
 	printf("========================================================\n\n");
+#endif
 #endif
 
 	sg_setup(&sokol_description);
@@ -578,7 +575,9 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
+#if defined(DEBUG)
 	printf("[Trace] Sokol Core GFX successfully attached to standard rendering pipeline.\n");
+#endif
 
 	struct CatClock_XbmLibrary* runtime_xbm_handle = CatClock_InitXbmLibrary(NULL);
 	if (!runtime_xbm_handle) {
@@ -592,50 +591,17 @@ int main(int argc, char* argv[]) {
 		SDL_Quit();
 		return 1;
 	}
-	printf("[Verification] Entering interactive runtime event processing layout loop...\n");
 
-	float current_scale = (float) ctx.current_half_steps / 2.0f;
-	printf("\n[Diagnostic Metrics] === VIEWPORT BOUNDS VERIFICATION ===\n");
-	printf("[Diagnostic Metrics] Initial Legacy Canvas Target Size: %.2f x %.2f px\n", baseline_w,
-		   baseline_h);
-	printf("[Diagnostic Metrics] Hardware Staging VRAM Atlas Canvas: %d x %d px\n", VRAM_TEX_WIDTH,
-		   VRAM_TEX_HEIGHT);
-	printf("[Diagnostic Metrics] Evaluated Vertex Map Max U Coordinate: %.4f\n", 103.0f / 128.0f);
-	printf("[Diagnostic Metrics] Evaluated Vertex Map Max V Coordinate: %.4f\n", 284.0f / 290.0f);
-	printf("[Diagnostic Metrics] Runtime Host Window Pixel Dimension: %d x %d px\n",
-		   (int) (baseline_w * current_scale), (int) (baseline_h * current_scale));
-	printf("[Diagnostic Metrics] =====================================\n\n");
-
-#if defined(SOKOL_GLCORE)
-	// OpenGL / Linux Layout: Flip UV coordinates vertically (1 -> 0, 0 -> 1)
-	// to properly compensate for OpenGL's bottom-left framebuffer texture origin.
 	CatClock_GpuVertex clock_vertices[] = { { .pos = { -1.0f, 1.0f }, .uv = { 0.0f, 0.0f } },
 											{ .pos = { 1.0f, 1.0f }, .uv = { 1.0f, 0.0f } },
 											{ .pos = { -1.0f, -1.0f }, .uv = { 0.0f, 1.0f } },
 											{ .pos = { 1.0f, -1.0f }, .uv = { 1.0f, 1.0f } } };
-#else
-	// Direct3D11 / Windows Layout: Original working native top-left coordinate system mappings
-	CatClock_GpuVertex clock_vertices[] = { { .pos = { -1.0f, 1.0f }, .uv = { 0.0f, 0.0f } },
-											{ .pos = { 1.0f, 1.0f }, .uv = { 1.0f, 0.0f } },
-											{ .pos = { -1.0f, -1.0f }, .uv = { 0.0f, 1.0f } },
-											{ .pos = { 1.0f, -1.0f }, .uv = { 1.0f, 1.0f } } };
-#endif
 
 	uint16_t clock_indices[] = { 0, 1, 2, 3 };
 
 	ctx.vertex_buffer = sg_make_buffer(
 		&(sg_buffer_desc) { .data = { .ptr = clock_vertices, .size = sizeof(clock_vertices) },
 							.label = "ClockMeshVertexBuffer" });
-
-	/* --- RUNTIME VERTEX GEOMETRY MONITOR --- */
-	printf("\n[Geometry Trace] --- Active Presentation Quad Map ---\n");
-	for (int i = 0; i < 4; i++) {
-		printf("  Vertex [%d] -> Pos: (%.2f, %.2f) | UV: (%.2f, %.2f)\n", i,
-			   clock_vertices[i].pos[0], clock_vertices[i].pos[1], clock_vertices[i].uv[0],
-			   clock_vertices[i].uv[1]);
-	}
-	printf("[Geometry Trace] ------------------------------------\n\n");
-	/* ---------------------------------------- */
 
 	ctx.index_buffer = sg_make_buffer(
 		&(sg_buffer_desc) { .usage = { .index_buffer = true },
@@ -661,7 +627,6 @@ int main(int argc, char* argv[]) {
 // =========================================================================
 // STAGING PIXELS DIAGNOSTIC DUMP FOR HARDWARE BUFFER VERIFICATION
 // =========================================================================
-#define TRACE_PIXEL_INTEGRITY
 #ifdef TRACE_PIXEL_INTEGRITY
 	{
 		long long body_count = 0, tie_count = 0, white_count = 0, eyes_count = 0;
@@ -795,7 +760,9 @@ int main(int argc, char* argv[]) {
 	ctx.body_mask_view = sg_make_view(&(sg_view_desc) {
 		.texture = { .image = ctx.body_mask_texture }, .label = "CatBodyMaskResourceView" });
 	free(staging_pixels);
+#if defined(DEBUG)
 	printf("[VRAM Init] Static image buffer assets and samplers committed to GPU context.\n");
+#endif
 
 	sg_pipeline_desc pip_desc
 		= { .shader = sg_make_shader(catclock_composite_shader_desc(sg_query_backend())),
@@ -820,7 +787,9 @@ int main(int argc, char* argv[]) {
 		fprintf(stderr, "[Fatal Error] GFX state pipeline compilation pass failed.\n");
 		return 1;
 	}
+#if defined(DEBUG)
 	printf("[Pipeline Init] Sokol drawing state maps compiled successfully.\n");
+#endif
 
 	InitializeOffscreenGenerationPipelines();
 
@@ -842,10 +811,10 @@ int main(int argc, char* argv[]) {
 	SDL_GetWindowSizeInPixels(ctx.window, &init_pixel_w, &init_pixel_h);
 	if (init_pixel_w <= 0 || init_pixel_h <= 0) {
 		float init_scale = (float) ctx.current_half_steps / 2.0f;
-		int logical_w
-			= (int) lroundf((ctx.use_decorations ? DECORATED_CANVAS_W : 103.0f) * init_scale);
-		int logical_h
-			= (int) lroundf((ctx.use_decorations ? DECORATED_CANVAS_H : 288.0f) * init_scale);
+		int logical_w = (int) lroundf(
+			(ctx.use_decorations ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W) * init_scale);
+		int logical_h = (int) lroundf(
+			(ctx.use_decorations ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H) * init_scale);
 		init_pixel_w = logical_w;
 		init_pixel_h = logical_h;
 	}
@@ -862,7 +831,9 @@ int main(int argc, char* argv[]) {
 
 	int active_viewport_w = init_pixel_w;
 	int active_viewport_h = init_pixel_h;
+#if defined(DEBUG)
 	printf("[Runtime Pacing] Main evaluation engine started. Target FPS: %d\n", target_fps);
+#endif
 
 	while (running) {
 		Uint64 frame_start_ticks = SDL_GetTicks();
@@ -876,12 +847,9 @@ int main(int argc, char* argv[]) {
 			case SDL_EVENT_KEY_DOWN:
 				if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_Q) {
 					running = false;
-				}
-				/* FIXED: Dual check both the alphanumeric row keys, keypad items, and physical
-				   hardware scancodes */
-				else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS
-						 || event.key.key == SDLK_KP_PLUS
-						 || event.key.scancode == SDL_SCANCODE_EQUALS) {
+				} else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS
+						   || event.key.key == SDLK_KP_PLUS
+						   || event.key.scancode == SDL_SCANCODE_EQUALS) {
 					ctx.current_half_steps++;
 					ctx.texture_cache_stale = true;
 					float updated_scale = (float) ctx.current_half_steps / 2.0f;
@@ -983,23 +951,24 @@ int main(int argc, char* argv[]) {
 			int sec_frame_idx = current_sec % 60;
 			int min_frame_idx = current_min % 60;
 			int hour_frame_idx = ((current_hour * 5) + (current_min / 12)) % 60;
-			float dynamic_fps = (float) ((ctx.target_fps <= 0) ? 30 : ctx.target_fps);
+			float dynamic_fps = (float) ((ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps);
 			float total_anim_frames = dynamic_fps * 2.0f;
 			int pendulum_frame_idx
 				= (int) fmod(computed_day_time_seconds * dynamic_fps, total_anim_frames);
 			int calculated_rows = ((ctx.target_fps * 2) + 9) / 10;
 
 			if (ctx.texture_cache_stale) {
-				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-											CatClock_ShaderHands, &hour_cfg);
-				CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-											CatClock_ShaderHands, &min_cfg);
-				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, 64, 96, TOTAL_HAND_PHASES, 10,
-											CatClock_ShaderHands, &sec_cfg);
-				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, 64, 32, (ctx.target_fps * 2), 10,
-											CatClock_ShaderEyes, NULL);
-				CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, 96, 96, (ctx.target_fps * 2), 10,
-											CatClock_ShaderTail, &tail_data);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, HAND_CELL_W, HAND_CELL_H,
+											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &hour_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, HAND_CELL_W, HAND_CELL_H,
+											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &min_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, HAND_CELL_W, HAND_CELL_H,
+											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &sec_cfg);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, EYES_CELL_W, EYES_CELL_H,
+											(ctx.target_fps * 2), 10, CatClock_ShaderEyes, NULL);
+				CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, TAIL_CELL_W, TAIL_CELL_H,
+											(ctx.target_fps * 2), 10, CatClock_ShaderTail,
+											&tail_data);
 
 #ifdef DEBUG_DUMP_ATLAS
 				Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
@@ -1225,6 +1194,8 @@ int main(int argc, char* argv[]) {
 	SDL_GL_DestroyContext(gl_context);
 	SDL_DestroyWindow(ctx.window);
 	SDL_Quit();
+#if defined(DEBUG)
 	printf("[Trace] Execution Context terminated cleanly.\n");
+#endif
 	return 0;
 }

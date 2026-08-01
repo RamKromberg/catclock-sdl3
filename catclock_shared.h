@@ -17,10 +17,6 @@
 #ifndef CATCLOCK_SHARED_H
 #define CATCLOCK_SHARED_H
 
-#ifndef TEST_MODE
-#define TEST_MODE 0
-#endif
-
 #include "sokol/sokol_gfx.h"
 #include <SDL3/SDL.h>
 #include <stdbool.h>
@@ -29,8 +25,8 @@
 /* ==========================================================================
    1. EXPLICIT GEOMETRY, TIMING & VIEWPORT METRICS
    ========================================================================== */
-#define BASELINE_CANVAS_W 101.0f
-#define BASELINE_CANVAS_H 201.0f
+#define UNDECORATED_CANVAS_W 103.0f
+#define UNCORATED_CANVAS_H 288.0f
 #define DECORATED_CANVAS_W 150.0f
 #define DECORATED_CANVAS_H 300.0f
 #define CHOP_OFFSET_X 24.0f
@@ -38,15 +34,19 @@
 
 #define ASSET_BODY_W 101
 #define ASSET_BODY_H 201
-#define ASSET_TAIL_W 96
-#define ASSET_TAIL_H 96
-#define GPU_PADDED_BODY_W 103
-#define GPU_PADDED_BODY_H 203
+#define TAIL_CELL_W 96
+#define TAIL_CELL_H 96
+#define HAND_CELL_W 64
+#define HAND_CELL_H 96
+#define EYES_CELL_W 64
+#define EYES_CELL_H 32
+#define OUTLINED_BODY_W 103
+#define OUTLINED_BODY_H 203
 
 #define VRAM_TEX_WIDTH 128
-#define VRAM_TEX_HEIGHT 290
-#define OFFSET_X 24
-#define OFFSET_Y 1
+#define VRAM_TEX_HEIGHT 288
+#define VRAM_TEX_OFFSET_X 24
+#define VRAM_TEX_OFFSET_Y 1
 
 #define TOTAL_HAND_PHASES 60
 #define DEFAULT_FPS 30
@@ -109,7 +109,7 @@ typedef struct {
 	uint64_t current_frame_step;
 	bool disable_outline;
 	bool disable_always_on_top;
-	bool hide_seconds;
+	bool disable_seconds;
 	bool texture_cache_stale;
 
 	/* Configured interface color parameters */

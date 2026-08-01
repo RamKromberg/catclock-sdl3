@@ -23,11 +23,17 @@
 /* ==========================================================================
    FOUNDATIONAL ASSET GEOMETRY & COORDINATE BLUEPRINTS
    ========================================================================== */
-#define CATTIE_WIDTH 87
-#define CATTIE_HEIGHT 20
-#define TIE_OFFSET_X 9
-#define TIE_OFFSET_Y 75
-#define TIE_MASK_SIZE (CATTIE_WIDTH * CATTIE_HEIGHT)
+#define EYES_MASK_WIDTH 54
+#define EYES_MASK_HEIGHT 23
+#define EYES_MASK_OFFSET_X 25
+#define EYES_MASK_OFFSET_Y 20
+#define WHITE_DETAILS_MASK_OFFSET_X 1
+#define WHITE_DETAILS_MASK_OFFSET_Y 6
+#define TIE_MASK_OFFSET_X 9
+#define TIE_MASK_OFFSET_Y 75
+#define TIE_MASK_WIDTH 87
+#define TIE_MASK_HEIGHT 20
+#define TIE_MASK_SIZE (TIE_MASK_WIDTH * TIE_MASK_HEIGHT)
 
 struct CatClock_XbmLibrary {
 	uint8_t* catback_bits;
@@ -256,11 +262,11 @@ uint8_t* CatClock_PreBakeTieMask(const uint8_t* raw_catback, const uint8_t* raw_
 		return NULL;
 	memset(mask_buffer, 0, TIE_MASK_SIZE);
 
-	int stride_tie = (CATTIE_WIDTH + 7) / 8;
+	int stride_tie = (TIE_MASK_WIDTH + 7) / 8;
 
-	for (int y = 0; y < CATTIE_HEIGHT; y++) {
-		for (int x = 0; x < CATTIE_WIDTH; x++) {
-			int local_idx = (y * CATTIE_WIDTH) + x;
+	for (int y = 0; y < TIE_MASK_HEIGHT; y++) {
+		for (int x = 0; x < TIE_MASK_WIDTH; x++) {
+			int local_idx = (y * TIE_MASK_WIDTH) + x;
 
 			int tie_byte_pos = (y * stride_tie) + (x / 8);
 			bool is_tie_fabric = (raw_tie[tie_byte_pos] & (1 << (x % 8))) != 0;
@@ -307,9 +313,9 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer,
 	int stride_back = (ASSET_BODY_W + 7) / 8;
 	int stride_white = (ASSET_BODY_W + 7) / 8;
 
-	int white_dx = 1, white_dy = 6;
-	int tie_dx = TIE_OFFSET_X;
-	int tie_dy = TIE_OFFSET_Y;
+	int white_dx = WHITE_DETAILS_MASK_OFFSET_X, white_dy = WHITE_DETAILS_MASK_OFFSET_Y;
+	int tie_dx = TIE_MASK_OFFSET_X;
+	int tie_dy = TIE_MASK_OFFSET_Y;
 
 	for (int y = 0; y < lib->catback_h; y++) {
 		for (int x = 0; x < lib->catback_w; x++) {
@@ -330,9 +336,9 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer,
 			int tie_x = x - tie_dx;
 			int tie_y = y - tie_dy;
 			int tie_bit = 0;
-			if (baked_tie_mask && tie_x >= 0 && tie_x < CATTIE_WIDTH && tie_y >= 0
-				&& tie_y < CATTIE_HEIGHT) {
-				tie_bit = (baked_tie_mask[(tie_y * CATTIE_WIDTH) + tie_x] == 255) ? 1 : 0;
+			if (baked_tie_mask && tie_x >= 0 && tie_x < TIE_MASK_WIDTH && tie_y >= 0
+				&& tie_y < TIE_MASK_HEIGHT) {
+				tie_bit = (baked_tie_mask[(tie_y * TIE_MASK_WIDTH) + tie_x] == 255) ? 1 : 0;
 			}
 
 			if (white_bit) {
@@ -343,11 +349,14 @@ void CatClock_BakeUnscaledMaterialIDStaging(uint8_t* target_buffer,
 				resolved_token = 0x99;
 			}
 
-			if (ctx.clean_eye_mask && x >= 25 && x < 79 && y >= 20 && y < 43) {
-				int ex = x - 25;
-				int ey = y - 20;
-				int eye_bit
-					= (ctx.clean_eye_mask[(ey * ((54 + 7) / 8)) + (ex / 8)] >> (ex % 8)) & 1;
+			if (ctx.clean_eye_mask && x >= EYES_MASK_OFFSET_X
+				&& x < (EYES_MASK_WIDTH + EYES_MASK_OFFSET_X) && y >= EYES_MASK_OFFSET_Y
+				&& y < (EYES_MASK_HEIGHT + EYES_MASK_OFFSET_Y)) {
+				int ex = x - EYES_MASK_OFFSET_X;
+				int ey = y - EYES_MASK_OFFSET_Y;
+				int eye_bit = (ctx.clean_eye_mask[(ey * ((EYES_MASK_WIDTH + 7) / 8)) + (ex / 8)]
+							   >> (ex % 8))
+					& 1;
 				if (eye_bit == 0) {
 					resolved_token = 0x55;
 				}
@@ -410,17 +419,19 @@ struct CatClock_XbmLibrary* CatClock_InitXbmLibrary(void* renderer) {
 
 		if (lib->catwhite_bits)
 			SoftBlitSilhouetteBits(ctx.master_silhouette, ASSET_BODY_W, ASSET_BODY_H,
-								   lib->catwhite_bits, lib->catwhite_w, lib->catwhite_h, 1, 6);
+								   lib->catwhite_bits, lib->catwhite_w, lib->catwhite_h,
+								   WHITE_DETAILS_MASK_OFFSET_X, WHITE_DETAILS_MASK_OFFSET_Y);
 		if (lib->tie_body_bits)
 			SoftBlitSilhouetteBits(ctx.master_silhouette, ASSET_BODY_W, ASSET_BODY_H,
-								   lib->tie_body_bits, lib->tie_body_w, lib->tie_body_h, 9, 75);
+								   lib->tie_body_bits, lib->tie_body_w, lib->tie_body_h,
+								   TIE_MASK_OFFSET_X, TIE_MASK_OFFSET_Y);
 	}
 
-	if (lib->eyes_bits && lib->eyes_w == 54 && lib->eyes_h == 23) {
-		int eye_stride = (54 + 7) / 8;
-		ctx.clean_eye_mask = (uint8_t*) malloc(eye_stride * 23);
+	if (lib->eyes_bits && lib->eyes_w == EYES_MASK_WIDTH && lib->eyes_h == EYES_MASK_HEIGHT) {
+		int eye_stride = (EYES_MASK_WIDTH + 7) / 8;
+		ctx.clean_eye_mask = (uint8_t*) malloc(eye_stride * EYES_MASK_HEIGHT);
 		if (ctx.clean_eye_mask) {
-			memcpy(ctx.clean_eye_mask, lib->eyes_bits, eye_stride * 23);
+			memcpy(ctx.clean_eye_mask, lib->eyes_bits, eye_stride * EYES_MASK_HEIGHT);
 			int patch_rows[] = { 21, 21, 21, 22, 22, 22, 22 };
 			int patch_cols[] = { 24, 26, 28, 23, 25, 27, 29 };
 			for (int i = 0; i < 7; i++)
@@ -428,16 +439,17 @@ struct CatClock_XbmLibrary* CatClock_InitXbmLibrary(void* renderer) {
 					|= (1 << (patch_cols[i] % 8));
 		}
 	}
-
+#if defined(DEBUG)
 	Diagnostics_LogAssetLifecycle("Main_Body_Silhouette", sil_alloc_bytes, ASSET_BODY_W,
 								  ASSET_BODY_H);
 	if (lib->eyes_bits)
-		Diagnostics_LogAssetLifecycle("Appendage_Moving_Eyes", (size_t) ((54 + 7) / 8 * 23),
+		Diagnostics_LogAssetLifecycle("Appendage_Moving_Eyes",
+									  (size_t) ((EYES_MASK_WIDTH + 7) / 8 * EYES_MASK_HEIGHT),
 									  lib->eyes_w, lib->eyes_h);
 	if (lib->hitbox_bits)
 		Diagnostics_LogAssetLifecycle("Window_Shaped_Hitbox", hitbox_alloc_bytes, lib->hitbox_w,
 									  lib->hitbox_h);
-
+#endif
 	return lib;
 }
 
@@ -505,21 +517,21 @@ void Diagnostics_LogScaleBoundaryChange(uint32_t step_value, float derived_multi
 
 /**
  * Unpacks the tightly packed 1-bit static assets into a single unified
- * 128x290 RGBA8 VRAM staging canvas sheet anchored at offset (24, 10).
+ * 128x288 RGBA8 VRAM staging canvas sheet anchored at offset (24, 1).
  */
 void CatClock_UnpackStaticAssetsToStagingBuffer(uint32_t* dest_rgba_buffer,
 												const uint8_t* catback_bits,
 												const uint8_t* tie_body_bits,
 												const uint8_t* catwhite_bits,
 												const uint8_t* eyes_bits) {
-	// 1. Reset the entire 128x290 layout space to full transparency
+	// 1. Reset the entire 128x288 layout space to full transparency
 	memset(dest_rgba_buffer, 0, VRAM_TEX_WIDTH * VRAM_TEX_HEIGHT * sizeof(uint32_t));
 
 	// Stride layout sizing metrics based on independent asset widths
-	int stride_back = (101 + 7) / 8; // ASSET_BODY_W = 101
-	int stride_white = (101 + 7) / 8; // ASSET_BODY_W = 101
-	int stride_tie = (87 + 7) / 8; // CATTIE_WIDTH = 87
-	int stride_eyes = (54 + 7) / 8; // EYES_WIDTH = 54
+	int stride_back = (ASSET_BODY_W + 7) / 8; // ASSET_BODY_W = 101
+	int stride_white = (ASSET_BODY_W + 7) / 8; // ASSET_BODY_W = 101
+	int stride_tie = (TIE_MASK_WIDTH + 7) / 8;
+	int stride_eyes = (EYES_MASK_WIDTH + 7) / 8;
 
 	// 2. Iterate line-by-line matching the unscaled template canvas space
 	for (int y = 0; y < ASSET_BODY_H; y++) {
@@ -536,25 +548,28 @@ void CatClock_UnpackStaticAssetsToStagingBuffer(uint32_t* dest_rgba_buffer,
 			}
 
 			// White fur details overlay (shifted by +1, +6)
-			int wx = x - 1;
-			int wy = y - 6;
-			if (catwhite_bits && wx >= 0 && wx < 101 && wy >= 0 && wy < 201) {
+			int wx = x - WHITE_DETAILS_MASK_OFFSET_X;
+			int wy = y - WHITE_DETAILS_MASK_OFFSET_Y;
+			if (catwhite_bits && wx >= 0 && wx < ASSET_BODY_W && wy >= 0
+				&& wy < ASSET_BODY_H) { // ASSET_BODY_W = 101; ASSET_BODY_H = 201
 				int idx = (wy * stride_white) + (wx / 8);
 				b_bit = (catwhite_bits[idx] >> (wx % 8)) & 1;
 			}
 
 			// Necktie body overlay (shifted by +9, +75)
-			int tx = x - 9;
-			int ty = y - 75;
-			if (tie_body_bits && tx >= 0 && tx < 87 && ty >= 0 && ty < 20) {
+			int tx = x - TIE_MASK_OFFSET_X;
+			int ty = y - TIE_MASK_OFFSET_Y;
+			if (tie_body_bits && tx >= 0 && tx < TIE_MASK_WIDTH && ty >= 0
+				&& ty < TIE_MASK_HEIGHT) {
 				int idx = (ty * stride_tie) + (tx / 8);
 				g_bit = (tie_body_bits[idx] >> (tx % 8)) & 1;
 			}
 
-			// Static eye socket backings (bounded at x:[25..79], y:[20..43])
-			if (eyes_bits && x >= 25 && x < 79 && y >= 20 && y < 43) {
-				int ex = x - 25;
-				int ey = y - 20;
+			// Static eye socket backings (bounded at x:[25..79], y:[EYES_MASK_OFFSET_Y..43])
+			if (eyes_bits && x >= EYES_MASK_OFFSET_X && x < (EYES_MASK_WIDTH + EYES_MASK_OFFSET_X)
+				&& y >= EYES_MASK_OFFSET_Y && y < (EYES_MASK_HEIGHT + EYES_MASK_OFFSET_Y)) {
+				int ex = x - EYES_MASK_OFFSET_X;
+				int ey = y - EYES_MASK_OFFSET_Y;
 				int idx = (ey * stride_eyes) + (ex / 8);
 				// Invert bit value if the source data tracks background empty space natively
 				a_bit = ((eyes_bits[idx] >> (ex % 8)) & 1) == 0 ? 1 : 0;
@@ -571,8 +586,8 @@ void CatClock_UnpackStaticAssetsToStagingBuffer(uint32_t* dest_rgba_buffer,
 				| ((uint32_t) g_chan << 8) | ((uint32_t) r_chan);
 
 			// Compute absolute coordinate index within our VRAM PoT sheet
-			int dest_x = OFFSET_X + x;
-			int dest_y = OFFSET_Y + y;
+			int dest_x = VRAM_TEX_OFFSET_X + x;
+			int dest_y = VRAM_TEX_OFFSET_Y + y;
 
 			dest_rgba_buffer[dest_y * VRAM_TEX_WIDTH + dest_x] = packed_pixel;
 		}

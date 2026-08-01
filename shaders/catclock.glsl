@@ -111,7 +111,7 @@ out vec4 frag_color;
 vec2 CalculateAtlasUvClamped(vec2 local_box_uv, int frame_idx, float target_rows) {
     float cols = 10.0;
     vec2 clean_uv = clamp(local_box_uv, vec2(0.001), vec2(0.999));
-    // DYNAMIC FIXED: Scaled properly using the current dynamic rows parameter
+    // Scaled properly using the current dynamic rows parameter
     vec2 segment_cell = vec2(1.0 / cols, 1.0 / target_rows);
     vec2 cell_offset = vec2(mod(float(frame_idx), cols), floor(float(frame_idx) / cols)) * segment_cell;
     return cell_offset + (clean_uv * segment_cell);
@@ -120,7 +120,7 @@ vec2 CalculateAtlasUvClamped(vec2 local_box_uv, int frame_idx, float target_rows
 void main() {
     vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
     bool is_tail_box = (overlay_uv.x >= (27.0 / 128.0) && overlay_uv.x <= (123.0 / 128.0) &&
-            overlay_uv.y >= (192.0 / 290.0) && overlay_uv.y <= (288.0 / 290.0));
+            overlay_uv.y >= (192.0 / 288.0) && overlay_uv.y <= (288.0 / 288.0));
     if (!is_tail_box) {
         frag_color = vec4(0.0);
         return;
@@ -128,7 +128,7 @@ void main() {
 
     vec2 tail_box_uv;
     tail_box_uv.x = (overlay_uv.x - (27.0 / 128.0)) / (96.0 / 128.0);
-    tail_box_uv.y = (overlay_uv.y - (192.0 / 290.0)) / (96.0 / 290.0);
+    tail_box_uv.y = (overlay_uv.y - (192.0 / 288.0)) / (96.0 / 288.0);
 
     float rows = float(tail_pupils_rows);
     float center_sample = texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv, tail_frame, rows)).x;
@@ -136,7 +136,7 @@ void main() {
 
     ivec2 texture_dimensions = textureSize(sampler2D(tail_sheet, main_sampler), 0);
     vec2 pixel_step = 1.0 / vec2(texture_dimensions);
-    // DYNAMIC FIXED: Stepping parameters adjust relative to the active runtime layout matrix height
+    // Stepping parameters adjust relative to the active runtime layout matrix height
     vec2 step_offset = pixel_step * vec2(10.0, rows);
 
     bool halo_hit = false;
@@ -189,13 +189,13 @@ vec2 CalculateAtlasUvHands(vec2 local_box_uv, int frame_idx, float target_rows) 
 void main() {
     vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
     bool is_clock_box = (overlay_uv.x >= (42.0 / 128.0) && overlay_uv.x <= (106.0 / 128.0) &&
-            overlay_uv.y >= (95.0 / 290.0) && overlay_uv.y <= (191.0 / 290.0));
+            overlay_uv.y >= (95.0 / 288.0) && overlay_uv.y <= (191.0 / 288.0));
     if (!is_clock_box) {
         frag_color = vec4(0.0);
         return;
     }
 
-    vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / 128.0)) / (64.0 / 128.0), (overlay_uv.y - (95.0 / 290.0)) / (96.0 / 290.0));
+    vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / 128.0)) / (64.0 / 128.0), (overlay_uv.y - (95.0 / 288.0)) / (96.0 / 288.0));
     bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
     bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
     bool sec_hit = texture(sampler2D(seconds_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, sec_frame, 6.0)).x > 0.001;
@@ -239,7 +239,7 @@ void main() {
     // Normalized screen coordinate mapping down to legacy box bounds matrix
     vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
     bool is_eye_box = (overlay_uv.x >= (44.0 / 128.0) && overlay_uv.x <= (108.0 / 128.0) &&
-            overlay_uv.y >= (17.0 / 290.0) && overlay_uv.y <= (49.0 / 290.0));
+            overlay_uv.y >= (17.0 / 288.0) && overlay_uv.y <= (49.0 / 288.0));
 
     if (!is_eye_box) {
         frag_color = vec4(0.0);
@@ -249,7 +249,7 @@ void main() {
     // Remap local UV frames to sample directly from the generated dynamic atlas tracking slots
     vec2 eyes_box_uv;
     eyes_box_uv.x = (overlay_uv.x - (44.0 / 128.0)) / (64.0 / 128.0);
-    eyes_box_uv.y = (overlay_uv.y - (17.0 / 290.0)) / (32.0 / 290.0);
+    eyes_box_uv.y = (overlay_uv.y - (17.0 / 288.0)) / (32.0 / 288.0);
 
     float rows = float(tail_pupils_rows);
     vec4 pupil_sample = texture(sampler2D(eyes_sheet, main_sampler), CalculateAtlasUvPupils(eyes_box_uv, pupil_frame, rows));

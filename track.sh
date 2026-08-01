@@ -107,7 +107,7 @@ get_process_vram() {
 
 while true; do
   ps -AT -o pid= -o lwp= -o user= -o vsz= -o rss= -o %mem= -o time= -o comm= -o args= | \
-	grep "catclock-sdl3" | \
+	grep -E "catclock-sdl3|xclock" | \
 	grep -vE "(foot|bash|sh|grep|gimp|track.sh)" | \
 	sort -k1,1n -k2,2n > "$RAW_STORE"
 
@@ -199,7 +199,7 @@ while true; do
 	  rank=1
 	fi
 
-	# FIXED: Adaptive Command Column Graphics
+	# Adaptive Command Column Graphics
 	if [ "$pid" = "$tid" ]                    ; then cmd_display="${TREE_COLOR}├─ ${RESET}$args"
 	elif [ "$SORT_BY_CPU" = true ]            ; then cmd_display="${TREE_COLOR}  → ${RESET}${THREAD_COLOR}(Thread) $thread_comm${RESET}"
 	else                                           cmd_display="${TREE_COLOR}│  ├─ ${RESET}${THREAD_COLOR}$thread_comm${RESET}"

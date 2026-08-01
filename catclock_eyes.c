@@ -19,6 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define EYES_MASK_WIDTH 54
+#define EYES_MASK_HEIGHT 23
+
 /* ==========================================================================
    ANAMORPHIC DUAL-PUPIL LOOK-TRAJECTORY ENGINE
    ========================================================================== */
@@ -90,8 +93,8 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	float pup_base_h = 10.5f * scale;
 	float max_offset_x = 5.0f * scale;
 
-	int unscaled_mask_w = 54;
-	int unscaled_mask_h = 23;
+	int unscaled_mask_w = EYES_MASK_WIDTH;
+	int unscaled_mask_h = EYES_MASK_HEIGHT;
 
 	float base_pad_x = 5.0f;
 	float base_pad_y = 4.0f;
