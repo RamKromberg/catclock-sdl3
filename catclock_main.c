@@ -804,7 +804,7 @@ int main(int argc, char* argv[]) {
 	struct {
 		int type;
 		SDL_Color color;
-	} sec_cfg = { HAND_TYPE_SECOND, ctx.second_color };
+	} sec_cfg = { HAND_TYPE_SECOND, ctx.seconds_color };
 	CatClock_TailShaderArgs tail_data = { 0.0f, 0.0f, false };
 
 	int init_pixel_w = 0, init_pixel_h = 0;
@@ -1027,7 +1027,7 @@ int main(int argc, char* argv[]) {
 			hands_payload.sec_frame = sec_frame_idx;
 			CatClock_NormalizeColorToUniform(ctx.hour_color, hands_payload.hour_color);
 			CatClock_NormalizeColorToUniform(ctx.minute_color, hands_payload.minute_color);
-			CatClock_NormalizeColorToUniform(ctx.second_color, hands_payload.second_color);
+			CatClock_NormalizeColorToUniform(ctx.seconds_color, hands_payload.seconds_color);
 
 			cb_pupil_params_t pupil_payload;
 			memset(&pupil_payload, 0, sizeof(cb_pupil_params_t));

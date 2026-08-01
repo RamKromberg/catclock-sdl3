@@ -24,8 +24,6 @@ layout(binding = 0) uniform cb_params_bake {
     int pendulum_frame_idx;
     int generation_mode_flag;
     int tail_pupils_rows;
-
-    // MATCHED HOSTRUNTIME PACKING ORDER
     vec4 cat_color;
     vec4 tie_color;
     vec4 pupil_color;
@@ -40,8 +38,14 @@ layout(binding = 0) uniform sampler main_sampler;
 in vec2 frag_uv;
 out vec4 frag_color;
 
+// Returns true if ANY anatomical component is present at a neighboring sample point
+bool sample_any_geometry(vec2 uv) {
+    vec4 m = texture(sampler2D(texture_sheet, main_sampler), uv);
+    return (m.r > 0.5 || m.g > 0.5 || m.b > 0.5);
+}
+
 void main() {
-    // Read the master unpacked canvas channels out of texture memory
+    // Read the master unpacked canvas channels
     vec4 mask = texture(sampler2D(texture_sheet, main_sampler), frag_uv);
     bool is_solid_body = (mask.r > 0.5);
     bool is_tie = (mask.g > 0.5);
@@ -50,23 +54,38 @@ void main() {
 
     // --- MODE 1: BAKE BACKDROP PASS ---
     if (generation_mode_flag == 1) {
+        // Maintain the hard boundary for the tail truncation region
+        bool is_inside_tail_width = (frag_uv.x >= (31.125 / 128.0) && frag_uv.x <= (118.875 / 128.0));
+        if (is_inside_tail_width && frag_uv.y >= (202.005 / 288.0)) {
+            frag_color = vec4(0.0);
+            return;
+        }
+
         vec2 dx = dFdx(frag_uv);
         vec2 dy = dFdy(frag_uv);
-        bool outline_hit = false;
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx + dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dx - dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv - dy).r > 0.5);
-        outline_hit = outline_hit || (texture(sampler2D(texture_sheet, main_sampler), frag_uv + dx - dy).r > 0.5);
 
-        if (is_solid_body) {
-            frag_color = vec4(cat_color.xyz, 1.0);
-        } else if (outline_hit) {
-            frag_color = vec4(outline_color.xyz, 1.0);
+        // Step A: Check if a structural outline border is needed near this fragment
+        bool outline_hit = false;
+        outline_hit = outline_hit || sample_any_geometry(frag_uv - dx + dy);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv + dy);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv + dx + dy);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv - dx);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv + dx);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv - dx - dy);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv - dy);
+        outline_hit = outline_hit || sample_any_geometry(frag_uv + dx - dy);
+
+        // Step B: Evaluate fill logic based strictly on component isolation
+        if (is_solid_body && !is_detail && !is_tie) {
+            // ONLY paint cat_color where the foundational body skin is exposed.
+            // Do NOT pre-fill under semi-transparent neckties or detail patches!
+            frag_color = vec4(cat_color);
+        } else if (outline_hit && !is_solid_body && !is_detail && !is_tie) {
+            // ONLY draw the outline if we are on an exterior edge of the combined mesh
+            frag_color = vec4(outline_color);
         } else {
+            // Leave fragments under alpha-transparent details perfectly empty
+            // so Mode 2 can composite them over transparency cleanly
             frag_color = vec4(0.0);
         }
         return;
@@ -75,13 +94,13 @@ void main() {
     // --- MODE 2: BAKE FOREGROUND PASS ---
     if (generation_mode_flag == 2) {
         if (is_sclera) {
-            frag_color = vec4(sclera_color.xyz, 1.0);
+            frag_color = vec4(sclera_color);
         } else if (is_detail) {
-            frag_color = vec4(detail_color.xyz, 1.0);
+            frag_color = vec4(detail_color); // Composites cleanly over Pass 1 empty voids
         } else if (is_tie) {
-            frag_color = vec4(tie_color.xyz, 1.0);
+            frag_color = vec4(tie_color);
         } else if (is_solid_body) {
-            frag_color = vec4(cat_color.xyz, 1.0);
+            frag_color = vec4(cat_color);
         } else {
             frag_color = vec4(0.0);
         }
@@ -90,11 +109,12 @@ void main() {
 
     frag_color = vec4(0.0);
 }
+
 #pragma sokol @end
 
-// ==============================================================================
-// 3. REFACACTOR PIPELINE: DETACHED 1PX ABSOLUTE UN-SCALED PENDULUM TAIL SHADER
-// ==============================================================================
+// ============================================================================
+// 3. SEPARATION PIPELINE: SEQUENTIAL MASK-CLIPPED BRIDGE TAIL SHADER
+// ============================================================================
 #pragma sokol @fs fs_tail
 layout(binding = 0) uniform cb_tail_params {
     int tail_frame;
@@ -111,32 +131,63 @@ out vec4 frag_color;
 vec2 CalculateAtlasUvClamped(vec2 local_box_uv, int frame_idx, float target_rows) {
     float cols = 10.0;
     vec2 clean_uv = clamp(local_box_uv, vec2(0.001), vec2(0.999));
-    // Scaled properly using the current dynamic rows parameter
     vec2 segment_cell = vec2(1.0 / cols, 1.0 / target_rows);
     vec2 cell_offset = vec2(mod(float(frame_idx), cols), floor(float(frame_idx) / cols)) * segment_cell;
     return cell_offset + (clean_uv * segment_cell);
 }
 
 void main() {
-    vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
-    bool is_tail_box = (overlay_uv.x >= (27.0 / 128.0) && overlay_uv.x <= (123.0 / 128.0) &&
-            overlay_uv.y >= (192.0 / 288.0) && overlay_uv.y <= (288.0 / 288.0));
-    if (!is_tail_box) {
-        frag_color = vec4(0.0);
-        return;
-    }
+    float CANVAS_W = 128.0;
+    float CANVAS_H = 288.0;
+    float QUAD_SRC_X = 23.0;
+    float QUAD_SIZE_W = 103.0;
 
+    // Convert raw quad fragments to master canvas coordinates
+    vec2 overlay_uv = vec2(((frag_uv.x * QUAD_SIZE_W) + QUAD_SRC_X) / CANVAS_W, frag_uv.y);
+
+    float TAIL_BOX_X0 = 27.0;
+    float TAIL_BOX_X1 = 123.0;
+    float TAIL_BOX_Y0 = 192.0;
+    float TAIL_BOX_Y1 = 288.0;
+
+    // Vertical Positioning: Calculate height of the canvas in physical screen pixels
+    float total_canvas_pixel_height = 1.0 / max(abs(dFdy(overlay_uv.y)), 0.00001);
+
+    // Map target row 202.0 into absolute screen-pixel space relative to current fragment anchor
+    float target_baseline_y = 202.00001 / CANVAS_H;
+    float pixel_delta_y = (overlay_uv.y - target_baseline_y) * total_canvas_pixel_height;
+    float screen_target_y = gl_FragCoord.y - pixel_delta_y;
+    float snapped_screen_y = round(screen_target_y);
+
+    // HARD GEOMETRIC SEGMENT CUTOUT:
+    // The procedural bottom line is strictly restricted to the left and right shoulders of the torso.
+    // By cutting out the middle section (31.0 to 119.0) completely if it hits the tail box,
+    // we stop drawing the line entirely where the collision occurs.
+    bool is_on_procedural_line = (abs(gl_FragCoord.y - snapped_screen_y) <= 0.5 &&
+            overlay_uv.x >= (31.0 / CANVAS_W) &&
+            overlay_uv.x <= (119.0 / CANVAS_W));
+
+    // Remap coordinates into local 0.0 - 1.0 box space for tail sampling
     vec2 tail_box_uv;
-    tail_box_uv.x = (overlay_uv.x - (27.0 / 128.0)) / (96.0 / 128.0);
-    tail_box_uv.y = (overlay_uv.y - (192.0 / 288.0)) / (96.0 / 288.0);
+    tail_box_uv.x = (overlay_uv.x - (TAIL_BOX_X0 / CANVAS_W)) / ((TAIL_BOX_X1 - TAIL_BOX_X0) / CANVAS_W);
+    tail_box_uv.y = (overlay_uv.y - (TAIL_BOX_Y0 / CANVAS_H)) / ((TAIL_BOX_Y1 - TAIL_BOX_Y0) / CANVAS_H);
 
+    ivec2 texture_dimensions = textureSize(sampler2D(tail_sheet, main_sampler), 0);
     float rows = float(tail_pupils_rows);
     float center_sample = texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv, tail_frame, rows)).x;
     bool is_solid_body = (center_sample > 0.0);
 
-    ivec2 texture_dimensions = textureSize(sampler2D(tail_sheet, main_sampler), 0);
+    // PERFECT SANDWICH CLIP RULE:
+    // Completely drop the procedural line tracking if it attempts to render inside the tail silhouette.
+    // This allows the line to exist on the left/right edges, but erases it entirely where they overlap.
+    bool valid_procedural_rim = is_on_procedural_line && !is_solid_body;
+
+    // Truncate baseline fragments mathematically without hard-stopping the rendering thread
+    if (overlay_uv.y < (202.005 / CANVAS_H) && !valid_procedural_rim) {
+        discard;
+    }
+
     vec2 pixel_step = 1.0 / vec2(texture_dimensions);
-    // Stepping parameters adjust relative to the active runtime layout matrix height
     vec2 step_offset = pixel_step * vec2(10.0, rows);
 
     bool halo_hit = false;
@@ -149,13 +200,30 @@ void main() {
     halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(0.0, -step_offset.y), tail_frame, rows)).x > 0.0);
     halo_hit = halo_hit || (texture(sampler2D(tail_sheet, main_sampler), CalculateAtlasUvClamped(tail_box_uv + vec2(step_offset.x, -step_offset.y), tail_frame, rows)).x > 0.0);
 
+    vec4 output_color = vec4(0.0);
+
     if (is_solid_body) {
-        frag_color = vec4(cat_color.xyz, 1.0);
-    } else if (halo_hit) {
-        frag_color = vec4(outline_color.xyz, 1.0);
-    } else {
-        frag_color = vec4(0.0);
+        output_color = cat_color;
+    } else if (halo_hit || valid_procedural_rim) {
+        output_color = outline_color;
     }
+
+    if (output_color.a < 0.01) {
+        discard;
+    }
+
+    // ========================================================================
+    // STANDALONE COLOR CORRECTION HEURISTIC LAYER
+    // ========================================================================
+    if (is_solid_body) {
+        float stacked_alpha = cat_color.a + cat_color.a * (1.0 - cat_color.a);
+        if (stacked_alpha > 0.0) {
+            output_color.rgb = (cat_color.rgb * cat_color.a + cat_color.rgb * cat_color.a * (1.0 - cat_color.a)) / stacked_alpha;
+        }
+        output_color.a = stacked_alpha;
+    }
+
+    frag_color = output_color;
 }
 #pragma sokol @end
 
@@ -169,7 +237,7 @@ layout(binding = 1) uniform cb_hands_params {
     int sec_frame;
     vec4 hour_color;
     vec4 minute_color;
-    vec4 second_color;
+    vec4 seconds_color;
 };
 layout(binding = 1) uniform texture2D hours_hand_sheet;
 layout(binding = 2) uniform texture2D mins_hand_sheet;
@@ -196,18 +264,45 @@ void main() {
     }
 
     vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / 128.0)) / (64.0 / 128.0), (overlay_uv.y - (95.0 / 288.0)) / (96.0 / 288.0));
+
     bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
     bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
     bool sec_hit = texture(sampler2D(seconds_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, sec_frame, 6.0)).x > 0.001;
-    vec4 mixed_pixel = vec4(0.0);
-    if (hour_hit) mixed_pixel = vec4(hour_color.xyz, 1.0);
-    if (min_hit) mixed_pixel = vec4(minute_color.xyz, 1.0);
-    if (sec_hit) mixed_pixel = vec4(second_color.xyz, 1.0);
 
-    if (mixed_pixel.a < 0.5) {
+    vec4 mixed_pixel = vec4(0.0);
+
+    // 1. Base Layer: Hour hand
+    if (hour_hit) {
+        mixed_pixel = hour_color;
+    }
+
+    // 2. Layer 2: Minute hand compositing
+    if (min_hit) {
+        // Calculate the new accumulated alpha channel
+        float out_a = minute_color.a + mixed_pixel.a * (1.0 - minute_color.a);
+
+        // Blend the colors safely without diminishing the solid background alpha
+        if (out_a > 0.0) {
+            mixed_pixel.rgb = (minute_color.rgb * minute_color.a + mixed_pixel.rgb * mixed_pixel.a * (1.0 - minute_color.a)) / out_a;
+        }
+        mixed_pixel.a = out_a;
+    }
+
+    // 3. Layer 3: Seconds hand compositing
+    if (sec_hit) {
+        float out_a = seconds_color.a + mixed_pixel.a * (1.0 - seconds_color.a);
+        if (out_a > 0.0) {
+            mixed_pixel.rgb = (seconds_color.rgb * seconds_color.a + mixed_pixel.rgb * mixed_pixel.a * (1.0 - seconds_color.a)) / out_a;
+        }
+        mixed_pixel.a = out_a;
+    }
+
+    // 4. Final output
+    if (mixed_pixel.a < 0.01) {
         frag_color = vec4(0.0);
         return;
     }
+
     frag_color = mixed_pixel;
 }
 #pragma sokol @end
@@ -256,7 +351,7 @@ void main() {
 
     // Purely evaluate and paint the pupil vector token channel match (Token ID 3)
     if (int(round(pupil_sample.x * 255.0)) == 3) {
-        frag_color = vec4(pupil_color.xyz, 1.0);
+        frag_color = vec4(pupil_color);
     } else {
         // Output clean empty space alpha so the static baked sclera backdrop underneath is visible
         frag_color = vec4(0.0);

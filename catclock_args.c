@@ -37,12 +37,6 @@ void PrintHelpDocumentation(const char* program_name) {
 	printf("  --notop                  Disable the forced 'Always on Top' window layer pinning. "
 		   "(Default: %s)\n",
 		   ctx.disable_always_on_top ? "True" : "False");
-	printf("  --noseconds              Completely hide the sweeping seconds hand. "
-		   "(Default: %s)\n",
-		   ctx.disable_seconds ? "True" : "False");
-	printf("  --nooutline              Disable the form-fitting 1px outline. "
-		   "(Default: %s)\n",
-		   ctx.disable_outline ? "True" : "False");
 	printf("  --decorations            Restore standard desktop borders & window title-bars. "
 		   "(Default: %s)\n",
 		   ctx.use_decorations ? "True" : "False");
@@ -50,31 +44,36 @@ void PrintHelpDocumentation(const char* program_name) {
 		   DEFAULT_FPS);
 	printf("  --scale [0.5,...,10.0]   Set the initial scale multiplier. (Default: %.1f)\n",
 		   (float) ctx.current_half_steps / 2.0f);
-	printf("  --decorationscolor [hex] Override background window color. (Default: %02x%02x%02x)\n",
-		   ctx.window_bg_color.r, ctx.window_bg_color.g, ctx.window_bg_color.b);
-	printf("  --catcolor [hex]         Override foreground body color. (Default: %02x%02x%02x)\n",
-		   ctx.cat_color.r, ctx.cat_color.g, ctx.cat_color.b);
-	printf("  --detailcolor [hex]      Override background body color. (Default: %02x%02x%02x)\n",
-		   ctx.detail_color.r, ctx.detail_color.g, ctx.detail_color.b);
-	printf("  --tiecolor [hex]         Override necktie color. (Default: %02x%02x%02x)\n",
-		   ctx.tie_color.r, ctx.tie_color.g, ctx.tie_color.b);
-	printf("  --pupilcolor [hex]       Override eye pupil color. (Default: %02x%02x%02x)\n",
-		   ctx.pupil_color.r, ctx.pupil_color.g, ctx.pupil_color.b);
-	printf("  --scleracolor [hex]      Override eye socket color. (Default: %02x%02x%02x)\n",
-		   ctx.sclera_color.r, ctx.sclera_color.g, ctx.sclera_color.b);
-	printf("  --hourscolor [hex]       Override hours hand hex color. (Default: %02x%02x%02x)\n",
-		   ctx.hour_color.r, ctx.hour_color.g, ctx.hour_color.b);
-	printf("  --minutescolor [hex]     Override minutes hand color. (Default: %02x%02x%02x)\n",
-		   ctx.minute_color.r, ctx.minute_color.g, ctx.minute_color.b);
-	printf("  --secondscolor [hex]     Override seconds hand color. (Default: %02x%02x%02x)\n",
-		   ctx.second_color.r, ctx.second_color.g, ctx.second_color.b);
-	printf("  --outlinecolor [hex]     Override outline color. (Default: %02x%02x%02x)\n",
-		   ctx.outline_color.r, ctx.outline_color.g, ctx.outline_color.b);
+	printf("  --decorationscolor [hex] Override background window color. (Default: "
+		   "%02x%02x%02x%02x)\n",
+		   ctx.window_bg_color.r, ctx.window_bg_color.g, ctx.window_bg_color.b,
+		   ctx.window_bg_color.a);
+	printf(
+		"  --catcolor [hex]         Override foreground body color. (Default: %02x%02x%02x%02x)\n",
+		ctx.cat_color.r, ctx.cat_color.g, ctx.cat_color.b, ctx.cat_color.a);
+	printf(
+		"  --detailcolor [hex]      Override background body color. (Default: %02x%02x%02x%02x)\n",
+		ctx.detail_color.r, ctx.detail_color.g, ctx.detail_color.b, ctx.detail_color.a);
+	printf("  --tiecolor [hex]         Override necktie color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.tie_color.r, ctx.tie_color.g, ctx.tie_color.b, ctx.tie_color.a);
+	printf("  --pupilcolor [hex]       Override eye pupil color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.pupil_color.r, ctx.pupil_color.g, ctx.pupil_color.b, ctx.pupil_color.a);
+	printf("  --scleracolor [hex]      Override eye socket color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.sclera_color.r, ctx.sclera_color.g, ctx.sclera_color.b, ctx.sclera_color.a);
+	printf(
+		"  --hourscolor [hex]       Override hours hand hex color. (Default: %02x%02x%02x%02x)\n",
+		ctx.hour_color.r, ctx.hour_color.g, ctx.hour_color.b, ctx.hour_color.a);
+	printf("  --minutescolor [hex]     Override minutes hand color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.minute_color.r, ctx.minute_color.g, ctx.minute_color.b, ctx.minute_color.a);
+	printf("  --secondscolor [hex]     Override seconds hand color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.seconds_color.r, ctx.seconds_color.g, ctx.seconds_color.b, ctx.seconds_color.a);
+	printf("  --outlinecolor [hex]     Override outline color. (Default: %02x%02x%02x%02x)\n",
+		   ctx.outline_color.r, ctx.outline_color.g, ctx.outline_color.b, ctx.outline_color.a);
 }
 
 /**
  * Helper Parse Hex Color
- * Parses 3-digit or 6-digit hexadecimal strings (with or without leading '#')
+ * Parses 4-digit or 8-digit hexadecimal strings (with or without leading '#')
  * directly into SDL_Color structures. Used for interface color customization overrides.
  */
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color) {
@@ -83,19 +82,19 @@ bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color) {
 	}
 
 	size_t len = strlen(hex_str);
-	unsigned int r = 0, g = 0, b = 0;
+	unsigned int r = 0, g = 0, b = 0, a = 0;
 
-	if (len == 6 && sscanf(hex_str, "%02x%02x%02x", &r, &g, &b) == 3) {
+	if (len == 8 && sscanf(hex_str, "%02x%02x%02x%02x", &r, &g, &b, &a) == 4) {
 		out_color->r = (uint8_t) r;
 		out_color->g = (uint8_t) g;
 		out_color->b = (uint8_t) b;
-		out_color->a = 255;
+		out_color->a = (uint8_t) a;
 		return true;
-	} else if (len == 3 && sscanf(hex_str, "%1x%1x%1x", &r, &g, &b) == 3) {
+	} else if (len == 4 && sscanf(hex_str, "%1x%1x%1x%1x", &r, &g, &b, &a) == 4) {
 		out_color->r = (uint8_t) (r * 17);
 		out_color->g = (uint8_t) (g * 17);
 		out_color->b = (uint8_t) (b * 17);
-		out_color->a = 255;
+		out_color->a = (uint8_t) (a * 17);
 		return true;
 	}
 
@@ -116,16 +115,14 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	context->pupil_color = (SDL_Color) { 0, 0, 0, 255 };
 	context->hour_color = (SDL_Color) { 0, 0, 0, 255 };
 	context->minute_color = (SDL_Color) { 0, 0, 0, 255 };
-	context->second_color = (SDL_Color) { 255, 0, 0, 255 };
+	context->seconds_color = (SDL_Color) { 255, 0, 0, 255 };
 	context->detail_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->sclera_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->outline_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->current_half_steps = 2;
-	context->disable_seconds = false;
 	context->target_fps = DEFAULT_FPS;
 	context->use_decorations = false;
-	context->disable_outline = false;
 	context->disable_always_on_top = false;
 	context->texture_cache_stale = false;
 	context->current_frame_step = 0;
@@ -143,30 +140,29 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 				if (calculated_steps > 20)
 					calculated_steps = 20;
 				context->current_half_steps = (uint32_t) calculated_steps;
+#if defined(DEBUG)
 				Diagnostics_LogScaleBoundaryChange(context->current_half_steps,
 												   ((float) context->current_half_steps / 2.0f));
+#endif
 			}
-		} else if (strcmp(argv[i], "--noseconds") == 0) {
-			context->disable_seconds = true;
-		} else if (strcmp(argv[i], "--nooutline") == 0) {
-			context->disable_outline = true;
-		} else if (strcmp(argv[i], "--decorations") == 0) {
-			context->use_decorations = true;
 		} else if (strcmp(argv[i], "--notop") == 0) {
 			context->disable_always_on_top = true;
+		} else if (strcmp(argv[i], "--decorations") == 0) {
+			context->use_decorations = true;
+		} else if (strcmp(argv[i], "--decorationscolor") == 0) {
+			if ((i + 1) < argc) {
+				HelperParseHexColor(argv[++i], &context->window_bg_color);
+			}
 		} else if (strcmp(argv[i], "--catcolor") == 0) {
 			if ((i + 1) < argc) {
 				if (HelperParseHexColor(argv[++i], &context->cat_color)) {
 					context->fg_color = context->cat_color;
 				}
 			}
-		} else if (strcmp(argv[i], "--decorationscolor") == 0) {
-			if ((i + 1) < argc) {
-				HelperParseHexColor(argv[++i], &context->window_bg_color);
-			}
 		} else if (strcmp(argv[i], "--detailcolor") == 0) {
 			if ((i + 1) < argc) {
 				HelperParseHexColor(argv[++i], &context->detail_color);
+				context->bg_color = context->detail_color;
 			}
 		} else if (strcmp(argv[i], "--tiecolor") == 0) {
 			if ((i + 1) < argc) {
@@ -192,7 +188,7 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 			}
 		} else if (strcmp(argv[i], "--secondscolor") == 0) {
 			if ((i + 1) < argc) {
-				HelperParseHexColor(argv[++i], &context->second_color);
+				HelperParseHexColor(argv[++i], &context->seconds_color);
 			}
 		} else if (strcmp(argv[i], "--outlinecolor") == 0) {
 			if ((i + 1) < argc) {

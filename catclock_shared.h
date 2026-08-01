@@ -107,9 +107,7 @@ typedef struct {
 	bool use_decorations;
 	int target_fps;
 	uint64_t current_frame_step;
-	bool disable_outline;
 	bool disable_always_on_top;
-	bool disable_seconds;
 	bool texture_cache_stale;
 
 	/* Configured interface color parameters */
@@ -122,7 +120,7 @@ typedef struct {
 	SDL_Color sclera_color;
 	SDL_Color hour_color;
 	SDL_Color minute_color;
-	SDL_Color second_color;
+	SDL_Color seconds_color;
 	SDL_Color detail_color;
 	SDL_Color outline_color;
 
@@ -225,11 +223,13 @@ void PrintHelpDocumentation(const char* program_name);
 bool HelperParseHexColor(const char* hex_str, SDL_Color* out_color);
 void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* context);
 
+#if defined(DEBUG)
 /* TELEMETRY REGISTRATION INTERFACES */
 void Diagnostics_LogAssetLifecycle(const char* asset_name, size_t buffer_size, int dimensions_w,
 								   int dimensions_h);
 void Diagnostics_LogShufflerIndex(const char* pipeline_channel, int target_frame_index,
 								  int calculated_phase_limit);
 void Diagnostics_LogScaleBoundaryChange(uint32_t step_value, float derived_multiplier);
+#endif
 
 #endif /* CATCLOCK_SHARED_H */

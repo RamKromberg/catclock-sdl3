@@ -493,6 +493,7 @@ void CatClock_DestroyXbmLibrary(struct CatClock_XbmLibrary* lib) {
 		return;
 	free(lib);
 }
+#if defined(DEBUG)
 /* =========================================================================
    CORE TELEMETRY MONITOR CHANNELS SUB-SYSTEM IMPLEMENTATIONS
    ========================================================================= */
@@ -514,7 +515,7 @@ void Diagnostics_LogScaleBoundaryChange(uint32_t step_value, float derived_multi
 		   "= %u | Factor Metric = %.2fx\n",
 		   step_value, derived_multiplier);
 }
-
+#endif
 /**
  * Unpacks the tightly packed 1-bit static assets into a single unified
  * 128x288 RGBA8 VRAM staging canvas sheet anchored at offset (24, 1).
