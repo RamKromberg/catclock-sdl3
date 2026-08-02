@@ -421,6 +421,53 @@ void CatClock_ResizeWindow(SDL_Window* window, int base_w, int base_h, float sca
 #endif
 }
 
+#if defined(DUMP_SEQUENCE)
+// Sequence Recording Control Parameters
+static bool g_is_recording_sequence = false;
+static int g_recorded_frame_counter = 0;
+static int g_target_sequence_length = 0;
+
+void Diagnostics_CaptureCompositeFrameToDisk(int viewport_w, int viewport_h, int sequence_idx) {
+	if (viewport_w <= 0 || viewport_h <= 0)
+		return;
+
+	size_t buffer_size = (size_t) (viewport_w * viewport_h * 4);
+	uint8_t* host_rgba_pixels = (uint8_t*) malloc(buffer_size);
+	if (!host_rgba_pixels) {
+		fprintf(stderr,
+				"[Diagnostic Error] Failed to allocate host RAM buffer for frame readback.\n");
+		return;
+	}
+
+#if !defined(SOKOL_D3D11)
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	glReadPixels(0, 0, viewport_w, viewport_h, GL_RGBA, GL_UNSIGNED_BYTE, host_rgba_pixels);
+#endif
+
+	// Generate filename using zero-padded sequential indexing strings
+	char filename_buffer[64];
+	snprintf(filename_buffer, sizeof(filename_buffer), "frame_cycle_%04d.pam", sequence_idx);
+
+	FILE* dump_file = fopen(filename_buffer, "wb");
+	if (dump_file) {
+		fputs("P7\n", dump_file);
+		fprintf(dump_file, "WIDTH %d\n", viewport_w);
+		fprintf(dump_file, "HEIGHT %d\n", viewport_h);
+		fputs("DEPTH 4\n", dump_file);
+		fputs("MAXVAL 255\n", dump_file);
+		fputs("TUPLTYPE RGB_ALPHA\n", dump_file); // Corrected token string mapping
+		fputs("ENDHDR\n", dump_file);
+
+		for (int y = viewport_h - 1; y >= 0; y--) {
+			uint8_t* row_ptr = &host_rgba_pixels[y * viewport_w * 4];
+			fwrite(row_ptr, 1, (size_t) (viewport_w * 4), dump_file);
+		}
+		fclose(dump_file);
+	}
+	free(host_rgba_pixels);
+}
+#endif
+
 int main(int argc, char* argv[]) {
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		fprintf(stderr, "[Fatal Error] SDL_Init subsystem initialization failure.\n");
@@ -847,6 +894,17 @@ int main(int argc, char* argv[]) {
 			case SDL_EVENT_KEY_DOWN:
 				if (event.key.key == SDLK_ESCAPE || event.key.key == SDLK_Q) {
 					running = false;
+#if defined(DUMP_SEQUENCE)
+				} else if (event.key.key == SDLK_P) {
+					if (!g_is_recording_sequence) {
+						g_is_recording_sequence = true;
+						g_recorded_frame_counter = 0;
+						// Calculate full cycle size limit: (FPS * 2) frames
+						g_target_sequence_length = target_fps * 2;
+						printf("[Diagnostic] Starting sequence dump for %d continuous frames...\n",
+							   g_target_sequence_length);
+					}
+#endif
 				} else if (event.key.key == SDLK_EQUALS || event.key.key == SDLK_PLUS
 						   || event.key.key == SDLK_KP_PLUS
 						   || event.key.scancode == SDL_SCANCODE_EQUALS) {
@@ -881,7 +939,6 @@ int main(int argc, char* argv[]) {
 				}
 
 				break;
-
 			case SDL_EVENT_MOUSE_WHEEL:
 				if (event.wheel.y > 0.0f) {
 					ctx.current_half_steps++;
@@ -1151,6 +1208,20 @@ int main(int argc, char* argv[]) {
 
 			sg_end_pass();
 			sg_commit();
+
+#if defined(DUMP_SEQUENCE)
+			if (g_is_recording_sequence) {
+				Diagnostics_CaptureCompositeFrameToDisk(active_viewport_w, active_viewport_h,
+														g_recorded_frame_counter);
+				g_recorded_frame_counter++;
+
+				if (g_recorded_frame_counter >= g_target_sequence_length) {
+					g_is_recording_sequence = false;
+					printf("[Diagnostic] Continuous cycle recording finished! %d frames dumped.\n",
+						   g_recorded_frame_counter);
+				}
+			}
+#endif
 
 #if defined(SOKOL_D3D11)
 			if (g_swap_chain) {
