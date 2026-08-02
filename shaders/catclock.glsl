@@ -119,6 +119,7 @@ void main() {
 layout(binding = 0) uniform cb_tail_params {
     int tail_frame;
     int tail_pupils_rows;
+    int use_decorations_flag;
     vec4 cat_color;
     vec4 outline_color;
 };
@@ -137,13 +138,15 @@ vec2 CalculateAtlasUvClamped(vec2 local_box_uv, int frame_idx, float target_rows
 }
 
 void main() {
+    // ------------------------------------------------------------------------
+    // STRICT POSITIONING ADJUSTMENT ONLY:
+    // Lock CANVAS_W to 128.0 and overlay_uv to frag_uv to match your uniform host viewports.
+    // All other original logic layers, cuts, and loops below stay completely untouched.
+    // ------------------------------------------------------------------------
     float CANVAS_W = 128.0;
     float CANVAS_H = 288.0;
-    float QUAD_SRC_X = 23.0;
-    float QUAD_SIZE_W = 103.0;
 
-    // Convert raw quad fragments to master canvas coordinates
-    vec2 overlay_uv = vec2(((frag_uv.x * QUAD_SIZE_W) + QUAD_SRC_X) / CANVAS_W, frag_uv.y);
+    vec2 overlay_uv = frag_uv;
 
     float TAIL_BOX_X0 = 27.0;
     float TAIL_BOX_X1 = 123.0;
@@ -212,9 +215,9 @@ void main() {
         discard;
     }
 
-    // ========================================================================
+    // ==========================================
     // STANDALONE COLOR CORRECTION HEURISTIC LAYER
-    // ========================================================================
+    // ==========================================
     if (is_solid_body) {
         float stacked_alpha = cat_color.a + cat_color.a * (1.0 - cat_color.a);
         if (stacked_alpha > 0.0) {
@@ -235,6 +238,7 @@ layout(binding = 1) uniform cb_hands_params {
     int hour_frame;
     int min_frame;
     int sec_frame;
+    int use_decorations_flag;
     vec4 hour_color;
     vec4 minute_color;
     vec4 seconds_color;
@@ -255,15 +259,22 @@ vec2 CalculateAtlasUvHands(vec2 local_box_uv, int frame_idx, float target_rows) 
 }
 
 void main() {
-    vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
-    bool is_clock_box = (overlay_uv.x >= (42.0 / 128.0) && overlay_uv.x <= (106.0 / 128.0) &&
+    float CANVAS_W = 128.0;
+
+    // UNIFIED: Direct 1:1 mapping from our host viewport grid
+    vec2 overlay_uv = frag_uv;
+
+    // Check if within the absolute textel box boundary of the clock face
+    bool is_clock_box = (overlay_uv.x >= (42.0 / CANVAS_W) && overlay_uv.x <= (106.0 / CANVAS_W) &&
             overlay_uv.y >= (95.0 / 288.0) && overlay_uv.y <= (191.0 / 288.0));
     if (!is_clock_box) {
         frag_color = vec4(0.0);
         return;
     }
 
-    vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / 128.0)) / (64.0 / 128.0), (overlay_uv.y - (95.0 / 288.0)) / (96.0 / 288.0));
+    // Remap coordinates cleanly into hand cell local tracking space
+    vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / CANVAS_W)) / (64.0 / CANVAS_W),
+            (overlay_uv.y - (95.0 / 288.0)) / (96.0 / 288.0));
 
     bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
     bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
@@ -271,24 +282,21 @@ void main() {
 
     vec4 mixed_pixel = vec4(0.0);
 
-    // 1. Base Layer: Hour hand
+    // Layer 1: Hour hand base
     if (hour_hit) {
         mixed_pixel = hour_color;
     }
 
-    // 2. Layer 2: Minute hand compositing
+    // Layer 2: Minute hand blending
     if (min_hit) {
-        // Calculate the new accumulated alpha channel
         float out_a = minute_color.a + mixed_pixel.a * (1.0 - minute_color.a);
-
-        // Blend the colors safely without diminishing the solid background alpha
         if (out_a > 0.0) {
             mixed_pixel.rgb = (minute_color.rgb * minute_color.a + mixed_pixel.rgb * mixed_pixel.a * (1.0 - minute_color.a)) / out_a;
         }
         mixed_pixel.a = out_a;
     }
 
-    // 3. Layer 3: Seconds hand compositing
+    // Layer 3: Seconds hand blending
     if (sec_hit) {
         float out_a = seconds_color.a + mixed_pixel.a * (1.0 - seconds_color.a);
         if (out_a > 0.0) {
@@ -297,7 +305,6 @@ void main() {
         mixed_pixel.a = out_a;
     }
 
-    // 4. Final output
     if (mixed_pixel.a < 0.01) {
         frag_color = vec4(0.0);
         return;
@@ -314,6 +321,7 @@ void main() {
 layout(binding = 2) uniform cb_pupil_params {
     int pupil_frame;
     int tail_pupils_rows;
+    int use_decorations_flag;
     vec4 pupil_color;
 };
 
@@ -331,9 +339,15 @@ vec2 CalculateAtlasUvPupils(vec2 local_box_uv, int frame_idx, float target_rows)
 }
 
 void main() {
-    // Normalized screen coordinate mapping down to legacy box bounds matrix
-    vec2 overlay_uv = vec2(((frag_uv.x * 103.0) + 23.0) / 128.0, frag_uv.y);
-    bool is_eye_box = (overlay_uv.x >= (44.0 / 128.0) && overlay_uv.x <= (108.0 / 128.0) &&
+    float CANVAS_W = 128.0;
+
+    // PERFECT SIMPLIFICATION: Because our host loop assigns a unified 128px
+    // viewport box across all layer passes, frag_uv maps natively 1:1 down
+    // into our canonical canvas coordinate space.
+    vec2 overlay_uv = frag_uv;
+
+    // Bounding Box Test for Eye sockets using canonical textel locations:
+    bool is_eye_box = (overlay_uv.x >= (44.0 / CANVAS_W) && overlay_uv.x <= (108.0 / CANVAS_W) &&
             overlay_uv.y >= (17.0 / 288.0) && overlay_uv.y <= (49.0 / 288.0));
 
     if (!is_eye_box) {
@@ -341,22 +355,21 @@ void main() {
         return;
     }
 
-    // Remap local UV frames to sample directly from the generated dynamic atlas tracking slots
+    // Convert to local normalized box texture map scales
     vec2 eyes_box_uv;
-    eyes_box_uv.x = (overlay_uv.x - (44.0 / 128.0)) / (64.0 / 128.0);
+    eyes_box_uv.x = (overlay_uv.x - (44.0 / CANVAS_W)) / (64.0 / CANVAS_W);
     eyes_box_uv.y = (overlay_uv.y - (17.0 / 288.0)) / (32.0 / 288.0);
 
     float rows = float(tail_pupils_rows);
     vec4 pupil_sample = texture(sampler2D(eyes_sheet, main_sampler), CalculateAtlasUvPupils(eyes_box_uv, pupil_frame, rows));
 
-    // Purely evaluate and paint the pupil vector token channel match (Token ID 3)
     if (int(round(pupil_sample.x * 255.0)) == 3) {
         frag_color = vec4(pupil_color);
     } else {
-        // Output clean empty space alpha so the static baked sclera backdrop underneath is visible
         frag_color = vec4(0.0);
     }
 }
+
 #pragma sokol @end
 
 // ==============================================================================

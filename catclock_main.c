@@ -440,15 +440,15 @@ int main(int argc, char* argv[]) {
 	int target_w = (int) lroundf(baseline_w * scale);
 	int target_h = (int) lroundf(baseline_h * scale);
 
-	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL;
+	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_TRANSPARENT;
 	if (!ctx.use_decorations) {
-		window_flags |= (SDL_WINDOW_BORDERLESS | SDL_WINDOW_TRANSPARENT);
+		window_flags |= SDL_WINDOW_BORDERLESS;
 	}
 	if (!ctx.disable_always_on_top) {
 		window_flags |= SDL_WINDOW_ALWAYS_ON_TOP;
 	}
 
-	ctx.window = SDL_CreateWindow("CatClock-SDL3 Widget Core", target_w, target_h, window_flags);
+	ctx.window = SDL_CreateWindow("CatClock", target_w, target_h, window_flags);
 	if (!ctx.window) {
 		fprintf(stderr, "[Fatal Error] Host Window abstraction layer failed to map.\n");
 		SDL_Quit();
@@ -956,6 +956,7 @@ int main(int argc, char* argv[]) {
 			int pendulum_frame_idx
 				= (int) fmod(computed_day_time_seconds * dynamic_fps, total_anim_frames);
 			int calculated_rows = ((ctx.target_fps * 2) + 9) / 10;
+			int dec_flag_value = ctx.use_decorations ? 1 : 0;
 
 			if (ctx.texture_cache_stale) {
 				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, HAND_CELL_W, HAND_CELL_H,
@@ -1017,6 +1018,7 @@ int main(int argc, char* argv[]) {
 			memset(&tail_payload, 0, sizeof(cb_tail_params_t));
 			tail_payload.tail_frame = pendulum_frame_idx;
 			tail_payload.tail_pupils_rows = calculated_rows;
+			tail_payload.use_decorations_flag = dec_flag_value;
 			CatClock_NormalizeColorToUniform(ctx.cat_color, tail_payload.cat_color);
 			CatClock_NormalizeColorToUniform(ctx.outline_color, tail_payload.outline_color);
 
@@ -1025,6 +1027,7 @@ int main(int argc, char* argv[]) {
 			hands_payload.hour_frame = hour_frame_idx;
 			hands_payload.min_frame = min_frame_idx;
 			hands_payload.sec_frame = sec_frame_idx;
+			hands_payload.use_decorations_flag = dec_flag_value;
 			CatClock_NormalizeColorToUniform(ctx.hour_color, hands_payload.hour_color);
 			CatClock_NormalizeColorToUniform(ctx.minute_color, hands_payload.minute_color);
 			CatClock_NormalizeColorToUniform(ctx.seconds_color, hands_payload.seconds_color);
@@ -1033,6 +1036,7 @@ int main(int argc, char* argv[]) {
 			memset(&pupil_payload, 0, sizeof(cb_pupil_params_t));
 			pupil_payload.pupil_frame = pendulum_frame_idx;
 			pupil_payload.tail_pupils_rows = calculated_rows;
+			pupil_payload.use_decorations_flag = dec_flag_value;
 			CatClock_NormalizeColorToUniform(ctx.pupil_color, pupil_payload.pupil_color);
 
 			// =========================================================================
@@ -1041,7 +1045,16 @@ int main(int argc, char* argv[]) {
 
 			sg_pass_action clock_pass_clear_action = { 0 };
 			clock_pass_clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
-			clock_pass_clear_action.colors[0].clear_value = (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
+
+			if (ctx.use_decorations) {
+				clock_pass_clear_action.colors[0].clear_value = (sg_color) {
+					(float) ctx.window_bg_color.r / 255.0f, (float) ctx.window_bg_color.g / 255.0f,
+					(float) ctx.window_bg_color.b / 255.0f, (float) ctx.window_bg_color.a / 255.0f
+				};
+			} else {
+				clock_pass_clear_action.colors[0].clear_value
+					= (sg_color) { 0.0f, 0.0f, 0.0f, 0.0f };
+			}
 
 			sg_pass swapchain_pass = { 0 };
 			swapchain_pass.action = clock_pass_clear_action;
@@ -1068,58 +1081,71 @@ int main(int argc, char* argv[]) {
 			base_bindings.views[VIEW_eyes_sheet] = eyes_atlas_view_slot;
 			base_bindings.views[VIEW_tail_sheet] = tail_atlas_view_slot;
 
-			// Calculate presentation parameters matching your structural 128px asset rules
+			// ============================================================================
+			// DYNAMIC WINDOW DECORATION CANVASSING & ALIGNMENT OVERRIDES
+			// ============================================================================
 			float presentation_scale = (float) ctx.current_half_steps / 2.0f;
-			int wide_layout_offset_x = (int) lroundf(-23.0f * presentation_scale);
-			int wide_layout_width = (int) lroundf(128.0f * presentation_scale);
 
-			// =========================================================================
-			// --- LAYER 1: Body Outline (Lowest Level) ---
-			// =========================================================================
+			// Set core defaults matching canonical transparent borderless mode:
+			int final_offset_x = (int) lroundf(-23.0f * presentation_scale);
+			int final_offset_y = 0;
+			int final_width = (int) lroundf(128.0f * presentation_scale);
+			int final_height
+				= (int) lroundf(288.0f * presentation_scale); // Added tracking height metric
+
+			if (ctx.use_decorations) {
+				// 1. Maintain a zeroed margin baseline. The 24px asset padding handles
+				// horizontal stride spacing natively within the texture map.
+				final_offset_x = 0;
+
+				// 2. Clear out exactly 10px of top margin room below the title frame:
+				final_offset_y = (int) lroundf(10.0f * presentation_scale);
+			}
+
+			// ----------------------------------------------------------------------------
+			// --- LAYER 1: Body Outline (Lowest Level Stack) ---
+			// ----------------------------------------------------------------------------
 			base_bindings.views[VIEW_rt_backdrop_tex] = rt_layer1_backdrop_sample_view;
 			base_bindings.views[VIEW_rt_foreground_tex] = rt_layer1_backdrop_sample_view;
 			sg_apply_pipeline(ctx.draw_pipeline);
 			sg_apply_bindings(&base_bindings);
-
-			// Shift the wide canvas layout left to position it within the window bounds
-			sg_apply_viewport(wide_layout_offset_x, 0, wide_layout_width, active_viewport_h, true);
+			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_draw(0, 4, 1);
 
-			// =========================================================================
+			// ----------------------------------------------------------------------------
 			// --- LAYERS 2 & 3: Tail Outline, then Tail (Middle Stack) ---
-			// =========================================================================
+			// ----------------------------------------------------------------------------
 			sg_apply_pipeline(draw_tail_pipeline);
 			sg_apply_bindings(&base_bindings);
-
-			// Stays anchored 1:1 to the native window frame boundaries
-			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
+			// CRITICAL FIX: Lock tail viewport identically to the static mesh bounds
+			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_tail_params, &SG_RANGE(tail_payload));
 			sg_draw(0, 4, 1);
 
-			// ========================================================
-			// --- LAYER 4: Body (Highest Layer) ---
-			// ========================================================
+			// ----------------------------------------------------------------------------
+			// --- LAYER 4: Body (Highest Level Mesh Torso) ---
+			// ----------------------------------------------------------------------------
 			base_bindings.views[VIEW_rt_backdrop_tex] = rt_layer3_foreground_sample_view;
 			base_bindings.views[VIEW_rt_foreground_tex] = rt_layer3_foreground_sample_view;
 			sg_apply_pipeline(ctx.draw_pipeline);
 			sg_apply_bindings(&base_bindings);
-
-			// Apply matching layout metrics to center the body torso torso core
-			sg_apply_viewport(wide_layout_offset_x, 0, wide_layout_width, active_viewport_h, true);
+			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_draw(0, 4, 1);
 
-			// ========================================================
+			// ----------------------------------------------------------------------------
 			// --- OVERLAYS: Dynamic Facial Features (Eyes & Hands) ---
-			// ========================================================
+			// ----------------------------------------------------------------------------
 			sg_apply_pipeline(draw_pupils_pipeline);
 			sg_apply_bindings(&base_bindings);
-			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
+			// CRITICAL FIX: Lock pupil viewport identically to the static mesh bounds
+			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_pupil_params, &SG_RANGE(pupil_payload));
 			sg_draw(0, 4, 1);
 
 			sg_apply_pipeline(draw_hands_pipeline);
 			sg_apply_bindings(&base_bindings);
-			sg_apply_viewport(0, 0, active_viewport_w, active_viewport_h, true);
+			// CRITICAL FIX: Lock clock hands viewport identically to the static mesh bounds
+			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_hands_params, &SG_RANGE(hands_payload));
 			sg_draw(0, 4, 1);
 
