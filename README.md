@@ -27,10 +27,9 @@ Run the executable from the command line using the following syntax:
 | :--- | :--- | :--- |
 | `--help` | Displays the parameter map documentation layout. | N/A |
 | `--notop` | Disables forcing the widget to stay pinned on the "Always on Top" window layer. | False |
-| `--decorations` | Restores standard desktop borders and title bars with a zero horizontal axis asset alignment baseline. | False |
-| `--decorationscolor [hex]` | Overrides the main window background clear color slot when `--decorations` borders are drawn (supports Alpha transparency channels). | ffffffff |
 | `--fps [1-120]` | Sets custom target frame rate pacing limit constraints. | 30 |
 | `--scale [0.5-10.0]` | Sets the initial window integer sizing step multiplier factor layout metrics. | 1.0 |
+| `--decorations [hex]` | Restore window borders & set an optional window background hex color. | ffffffff |
 | `--catcolor [hex]` | Overrides the default black cat body base layout canvas channels. | 000000ff |
 | `--detailcolor [hex]` | Overrides default white accents and static foreground detail channels. | ffffffff |
 | `--tiecolor [hex]` | Overrides default necktie hex color fill payload. | ffffffff |

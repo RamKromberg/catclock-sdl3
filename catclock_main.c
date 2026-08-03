@@ -97,7 +97,7 @@ static SDL_HitTestResult SDLCALL WidgetWindowHitTest(SDL_Window* win, const SDL_
 													 void* data) {
 	(void) win;
 	(void) data;
-	if (ctx.use_decorations)
+	if (ctx.window_bg_color.a != 0)
 		return SDL_HITTEST_NORMAL;
 	if (!ctx.hitbox_bits)
 		return SDL_HITTEST_DRAGGABLE;
@@ -469,6 +469,32 @@ void Diagnostics_CaptureCompositeFrameToDisk(int viewport_w, int viewport_h, int
 #endif
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+	bool needs_console = false;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--help") == 0) {
+			needs_console = true;
+			break;
+		}
+	}
+
+	if (needs_console) {
+		// Check if stdout is already directed somewhere valid (like a Git Bash pipe)
+		HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+		DWORD file_type = GetFileType(std_out);
+
+		// Only run AttachConsole if we are in cmd.exe/PowerShell where file_type
+		// is FILE_TYPE_UNKNOWN (detached) or NOT a pipe/character layout.
+		if (file_type != FILE_TYPE_PIPE && file_type != FILE_TYPE_CHAR) {
+			if (AttachConsole((DWORD) -1)) { // Target parent cmd process
+				FILE* fp;
+				freopen_s(&fp, "CONOUT$", "w", stdout);
+				freopen_s(&fp, "CONOUT$", "w", stderr);
+			}
+		}
+	}
+#endif
+
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		fprintf(stderr, "[Fatal Error] SDL_Init subsystem initialization failure.\n");
 		return 1;
@@ -481,14 +507,14 @@ int main(int argc, char* argv[]) {
 	SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
 #endif
 
-	float baseline_w = ctx.use_decorations ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W;
-	float baseline_h = ctx.use_decorations ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H;
+	float baseline_w = (ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W;
+	float baseline_h = (ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H;
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int target_w = (int) lroundf(baseline_w * scale);
 	int target_h = (int) lroundf(baseline_h * scale);
 
 	SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_TRANSPARENT;
-	if (!ctx.use_decorations) {
+	if (ctx.window_bg_color.a == 0) {
 		window_flags |= SDL_WINDOW_BORDERLESS;
 	}
 	if (!ctx.disable_always_on_top) {
@@ -505,7 +531,7 @@ int main(int argc, char* argv[]) {
 	SDL_SetWindowHitTest(ctx.window, WidgetWindowHitTest, NULL);
 
 #ifdef _WIN32
-	if (ctx.use_decorations) {
+	if (ctx.window_bg_color.a != 0) {
 		SDL_PropertiesID window_props = SDL_GetWindowProperties(ctx.window);
 		HWND hwnd
 			= (HWND) SDL_GetPointerProperty(window_props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
@@ -859,9 +885,10 @@ int main(int argc, char* argv[]) {
 	if (init_pixel_w <= 0 || init_pixel_h <= 0) {
 		float init_scale = (float) ctx.current_half_steps / 2.0f;
 		int logical_w = (int) lroundf(
-			(ctx.use_decorations ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W) * init_scale);
+			((ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W)
+			* init_scale);
 		int logical_h = (int) lroundf(
-			(ctx.use_decorations ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H) * init_scale);
+			((ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H) * init_scale);
 		init_pixel_w = logical_w;
 		init_pixel_h = logical_h;
 	}
@@ -1013,7 +1040,7 @@ int main(int argc, char* argv[]) {
 			int pendulum_frame_idx
 				= (int) fmod(computed_day_time_seconds * dynamic_fps, total_anim_frames);
 			int calculated_rows = ((ctx.target_fps * 2) + 9) / 10;
-			int dec_flag_value = ctx.use_decorations ? 1 : 0;
+			int dec_flag_value = (ctx.window_bg_color.a != 0) ? 1 : 0;
 
 			if (ctx.texture_cache_stale) {
 				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, HAND_CELL_W, HAND_CELL_H,
@@ -1103,7 +1130,7 @@ int main(int argc, char* argv[]) {
 			sg_pass_action clock_pass_clear_action = { 0 };
 			clock_pass_clear_action.colors[0].load_action = SG_LOADACTION_CLEAR;
 
-			if (ctx.use_decorations) {
+			if (ctx.window_bg_color.a != 0) {
 				clock_pass_clear_action.colors[0].clear_value = (sg_color) {
 					(float) ctx.window_bg_color.r / 255.0f, (float) ctx.window_bg_color.g / 255.0f,
 					(float) ctx.window_bg_color.b / 255.0f, (float) ctx.window_bg_color.a / 255.0f
@@ -1150,7 +1177,7 @@ int main(int argc, char* argv[]) {
 			int final_height
 				= (int) lroundf(288.0f * presentation_scale); // Added tracking height metric
 
-			if (ctx.use_decorations) {
+			if (ctx.window_bg_color.a != 0) {
 				// 1. Maintain a zeroed margin baseline. The 24px asset padding handles
 				// horizontal stride spacing natively within the texture map.
 				final_offset_x = 0;

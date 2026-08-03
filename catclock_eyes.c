@@ -40,7 +40,6 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 	/* Original compression profiles tracking horizontal displacement look angles */
 	float compression_w = sqrtf(fmaxf(0.1f, 1.0f - (look_x * look_x * 0.45f)));
 	float compression_h = sqrtf(fmaxf(0.1f, 1.0f - (look_x * look_x * 0.225f)));
-
 	float pup_w = r_base_w * compression_w;
 	float pup_h = r_base_h * compression_h;
 
@@ -55,10 +54,8 @@ static void SoftwareDrawPupilOval(uint8_t* buffer, float cx, float cy, float r_b
 		for (int x = x0; x <= x1; x++) {
 			if (x < clip_x0 || x >= clip_x1 || x >= atlas_w)
 				continue;
-
 			float dx = ((float) x + 0.5f - true_center_x) / pup_w;
 			float dy = ((float) y + 0.5f - true_center_y) / pup_h;
-
 			if ((dx * dx) + (dy * dy) <= 1.0f) {
 				PlotSoftwarePixel(buffer, x, y, atlas_w, atlas_h, PALETTE_PUPIL);
 			}
@@ -81,10 +78,9 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	int cols = 10;
 	int total_fps_frames = (ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps;
 	int total_frames = total_fps_frames * 2;
-
 	int cell_w = atlas_w / cols;
 
-	/* RE-ALIGNED: Derive the local float scale factor cleanly from unified half-steps tracking */
+	/* Derive the local float scale factor cleanly from unified half-steps tracking */
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int scaled_cell_h = (int) ceilf(32.0f * scale) + 2;
 
@@ -101,11 +97,8 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	float base_eye_w = 23.0f;
 	float base_gap_x = 36.0f;
 
-	float visual_pad = ctx.use_decorations ? 0.0f : 1.0f;
-
-	/* CORRECTION: Linked to modernized canvas metrics constants inside shared header */
-	float global_origin_x = (CHOP_OFFSET_X + visual_pad);
-	float global_origin_y = (CHOP_OFFSET_Y + visual_pad);
+	float global_origin_x = (float) CHOP_OFFSET_X;
+	float global_origin_y = (float) CHOP_OFFSET_Y;
 
 	/* Enforce rigid bounding-box clipping markers to stop color leakage between frames */
 	int clip_x0 = cell_x

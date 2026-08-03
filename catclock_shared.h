@@ -104,7 +104,6 @@ typedef struct {
 typedef struct {
 	SDL_Window* window;
 	uint32_t current_half_steps; // Scale tracking state bound to step changes
-	bool use_decorations;
 	int target_fps;
 	uint64_t current_frame_step;
 	bool disable_always_on_top;

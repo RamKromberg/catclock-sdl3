@@ -19,6 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 /* ==========================================================================
    COMMAND-LINE ARCHITECTURE & VALUE VALIDATION SUBSYSTEM
    ========================================================================== */
@@ -37,17 +41,13 @@ void PrintHelpDocumentation(const char* program_name) {
 	printf("  --notop                  Disable the forced 'Always on Top' window layer pinning. "
 		   "(Default: %s)\n",
 		   ctx.disable_always_on_top ? "True" : "False");
-	printf("  --decorations            Restore standard desktop borders & window title-bars. "
-		   "(Default: %s)\n",
-		   ctx.use_decorations ? "True" : "False");
 	printf("  --fps [1-120]            Set a custom target frame rate limit. (Default: %d)\n",
 		   DEFAULT_FPS);
 	printf("  --scale [0.5,...,10.0]   Set the initial scale multiplier. (Default: %.1f)\n",
 		   (float) ctx.current_half_steps / 2.0f);
-	printf("  --decorationscolor [hex] Override background window color. (Default: "
-		   "%02x%02x%02x%02x)\n",
-		   ctx.window_bg_color.r, ctx.window_bg_color.g, ctx.window_bg_color.b,
-		   ctx.window_bg_color.a);
+	printf("  --decorations [hex]      Restore window borders & set an optional window background "
+		   "hex color. (Default: %02x%02x%02xff)\n",
+		   ctx.window_bg_color.r, ctx.window_bg_color.g, ctx.window_bg_color.b);
 	printf(
 		"  --catcolor [hex]         Override foreground body color. (Default: %02x%02x%02x%02x)\n",
 		ctx.cat_color.r, ctx.cat_color.g, ctx.cat_color.b, ctx.cat_color.a);
@@ -119,10 +119,12 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	context->detail_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->sclera_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->outline_color = (SDL_Color) { 255, 255, 255, 255 };
-	context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
+
+	/* 1. Default color updated to transparent alpha to indicate "no decorations" */
+	context->window_bg_color = (SDL_Color) { 255, 255, 255, 0 };
+
 	context->current_half_steps = 2;
 	context->target_fps = DEFAULT_FPS;
-	context->use_decorations = false;
 	context->disable_always_on_top = false;
 	context->texture_cache_stale = false;
 	context->current_frame_step = 0;
@@ -130,6 +132,16 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--help") == 0) {
 			PrintHelpDocumentation(argv[0]);
+#ifdef _WIN32
+			HWND console_win = GetConsoleWindow();
+			if (console_win != NULL) {
+				HANDLE std_out = GetStdHandle(STD_OUTPUT_HANDLE);
+				DWORD file_type = GetFileType(std_out);
+				if (file_type == FILE_TYPE_CHAR) {
+					PostMessage(console_win, WM_KEYDOWN, VK_RETURN, 0);
+				}
+			}
+#endif
 			exit(0);
 		} else if (strcmp(argv[i], "--scale") == 0) {
 			if ((i + 1) < argc) {
@@ -140,18 +152,22 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 				if (calculated_steps > 20)
 					calculated_steps = 20;
 				context->current_half_steps = (uint32_t) calculated_steps;
-#if defined(DEBUG)
-				Diagnostics_LogScaleBoundaryChange(context->current_half_steps,
-												   ((float) context->current_half_steps / 2.0f));
-#endif
 			}
 		} else if (strcmp(argv[i], "--notop") == 0) {
 			context->disable_always_on_top = true;
 		} else if (strcmp(argv[i], "--decorations") == 0) {
-			context->use_decorations = true;
-		} else if (strcmp(argv[i], "--decorationscolor") == 0) {
-			if ((i + 1) < argc) {
-				HelperParseHexColor(argv[++i], &context->window_bg_color);
+			if ((i + 1) < argc && argv[i + 1][0] != '-') {
+				// Next value present and isn't another flag parameter: Parse Hex value
+				if (HelperParseHexColor(argv[i + 1], &context->window_bg_color)) {
+					i++; // Successfully parsed, advance past the color argument
+				} else {
+					// Parsing failed, fallback safely to default white decorations
+					context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
+					i++;
+				}
+			} else {
+				// Alone or trailing parameter: Apply canonical solid white layout
+				context->window_bg_color = (SDL_Color) { 255, 255, 255, 255 };
 			}
 		} else if (strcmp(argv[i], "--catcolor") == 0) {
 			if ((i + 1) < argc) {
