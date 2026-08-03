@@ -21,6 +21,10 @@
 #include <time.h>
 #include <math.h>
 
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <unistd.h>
+#endif
+
 #ifndef SOKOL_IMPL
 #define SOKOL_IMPL
 #endif
@@ -494,18 +498,41 @@ int main(int argc, char* argv[]) {
 		}
 	}
 #endif
-
-	if (!SDL_Init(SDL_INIT_VIDEO)) {
-		fprintf(stderr, "[Fatal Error] SDL_Init subsystem initialization failure.\n");
-		return 1;
-	}
-
 	ParseCommandLineArguments(argc, argv, &ctx);
 
 #if defined(__linux__) && !defined(__ANDROID__)
-	SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
 	SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
+
+	int stderr_bk = -1;
+
+	if (ctx.window_bg_color.a == 0) {
+		SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "0");
+		setenv("LIBDECOR_PLUGIN_DIR", "/dev/null", 1);
+		stderr_bk = dup(fileno(stderr));
+		FILE* dummy_f = freopen("/dev/null", "w", stderr);
+		if (dummy_f) {
+			(void) dummy_f;
+		}
+	} else {
+		SDL_SetHint(SDL_HINT_VIDEO_WAYLAND_ALLOW_LIBDECOR, "1");
+	}
 #endif
+
+	bool sdl_status = SDL_Init(SDL_INIT_VIDEO);
+
+#if defined(__linux__) && !defined(__ANDROID__)
+	if (stderr_bk != -1) {
+		fflush(stderr);
+		dup2(stderr_bk, fileno(stderr));
+		close(stderr_bk);
+		clearerr(stderr);
+	}
+#endif
+
+	if (!sdl_status) {
+		fprintf(stderr, "[Fatal Error] SDL_Init subsystem initialization failure.\n");
+		return 1;
+	}
 
 	float baseline_w = (ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_W : UNDECORATED_CANVAS_W;
 	float baseline_h = (ctx.window_bg_color.a != 0) ? DECORATED_CANVAS_H : UNCORATED_CANVAS_H;
