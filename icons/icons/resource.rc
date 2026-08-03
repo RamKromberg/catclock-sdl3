@@ -1,0 +1,2 @@
+// Win32 App Resource definition script
+IDI_APPLICATION_ICON ICON "catclock.ico"

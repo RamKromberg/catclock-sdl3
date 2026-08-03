@@ -120,31 +120,10 @@ assets:
 	@echo " Done! Unified 'assets/hitbox.xbm' has been cleanly regenerated."
 	@echo "========================================================================="
 
-.SECONDARY: resource.rc catclock_icon.ico
+.SECONDARY: icons/icons/resource.rc
 
-resource.rc: assets/cat.xbm
-	@echo "Processing transparent corner-triangle application icon assets..."
-	magick assets/cat.xbm -trim build_tmp_trimmed.png
-	magick build_tmp_trimmed.png -shave 0x1 -background white -gravity West -extent 48x48 build_tmp_48base.png
-	magick build_tmp_48base.png \
-		-fuzz 1% -fill none -draw "color 0,0 floodfill" \
-		-fuzz 1% -fill none -draw "color 47,0 floodfill" \
-		-fuzz 1% -fill none -draw "color 47,47 floodfill" \
-		-fuzz 1% -fill none -draw "color 0,47 floodfill" \
-		-fuzz 1% -fill none -draw "color 24,0 floodfill" \
-		-stroke none -strokewidth 1 -draw "line 47,0 47,47" build_flat_master.png
-	magick build_flat_master.png \
-		\( +clone -alpha extract -morphology edgeout disk:2 -background white -alpha shape \) -compose dst_over -composite build_flat_48.png
-	magick build_flat_48.png -scale 16x16 build_flat_16.png
-	magick build_flat_48.png -scale 32x32 build_flat_32.png
-	magick build_flat_48.png -scale 64x64 build_flat_64.png
-	magick build_flat_48.png -scale 256x256 build_flat_256.png
-	magick build_flat_16.png build_flat_32.png build_flat_48.png build_flat_64.png build_flat_256.png catclock_icon.ico
-	echo '1 ICON "catclock_icon.ico"' > resource.rc
-	rm -f build_tmp_*.png build_flat_*.png
-
-catclock-sdl3_resource.o: resource.rc
-	$(WIN_WINDRES) resource.rc -o catclock-sdl3_resource.o
+catclock-sdl3_resource.o: icons/icons/resource.rc
+	$(WIN_WINDRES) icons/icons/resource.rc -o catclock-sdl3_resource.o
 
 windows: catclock-sdl3_resource.o $(WIN_OBJS)
 	@echo "Staging build directories..."
@@ -218,7 +197,6 @@ windows: catclock-sdl3_resource.o $(WIN_OBJS)
 clean:
 	rm -f $(OBJS) $(WIN_OBJS) $(TARGET) $(WIN_TARGET) catclock-sdl3_resource.o 
 	rm -f *.png *.pgm *.pam
-	rm -f resource.rc catclock_icon.ico
 	rm -f catclock_shaders_gl.h
 	rm -f catclock_shaders_d3d11.h
 
