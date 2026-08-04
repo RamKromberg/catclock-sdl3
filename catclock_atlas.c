@@ -114,26 +114,35 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 /* System Asset Automated Blueprint Dumps System */
 #ifdef DEBUG_DUMP_ATLAS
 		/* Track clock-hands packing limits safely */
-		if (cell_base_w == HAND_CELL_W && cell_base_h == HAND_CELL_H
-			&& total_frames == TOTAL_HAND_PHASES) {
+		if (cell_base_w == HAND_CELL_W && cell_base_h == HAND_CELL_H) {
 			struct {
 				int type;
 				SDL_Color color;
 			}* hand_ptr = userdata;
-			if (hand_ptr && hand_ptr->type == HAND_TYPE_HOUR) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_hours_atlas.pam", atlas->index_buffer,
-													atlas->atlas_w, atlas->atlas_h);
-			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_MINUTE) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_minutes_atlas.pam", atlas->index_buffer,
-													atlas->atlas_w, atlas->atlas_h);
-			} else if (hand_ptr && hand_ptr->type == HAND_TYPE_SECOND) {
-				CatClock_DebugDumpGenericAtlasToPam("dump_seconds_atlas.pam", atlas->index_buffer,
+
+			if (hand_ptr) {
+				char filename_buf[128];
+				const char* hand_label = "unknown";
+
+				// Map hand descriptor text keys
+				if (hand_ptr->type == HAND_TYPE_HOUR)
+					hand_label = "hours";
+				else if (hand_ptr->type == HAND_TYPE_MINUTE)
+					hand_label = "minutes";
+				else if (hand_ptr->type == HAND_TYPE_SECOND)
+					hand_label = "seconds";
+
+				// Format invariant hands: dump_[label]_atlas_[rows]x[cols].pam
+				snprintf(filename_buf, sizeof(filename_buf), "dump_%s_atlas_%dx%d.pam", hand_label,
+						 atlas->atlas_rows, atlas->atlas_cols);
+
+				CatClock_DebugDumpGenericAtlasToPam(filename_buf, atlas->index_buffer,
 													atlas->atlas_w, atlas->atlas_h);
 			}
 		}
 		/* Track ping-pong cells using explicit base identifiers */
 		else if (cell_base_w == EYES_CELL_W && cell_base_h == EYES_CELL_H) {
-			char filename_buf[128]; /* Fixed sizing buffer width added */
+			char filename_buf[128];
 			snprintf(filename_buf, sizeof(filename_buf), "dump_eyes_atlas_fps%d_%dx%d.pam",
 					 ctx.target_fps, atlas->atlas_rows, atlas->atlas_cols);
 			CatClock_DebugDumpGenericAtlasToPam(filename_buf, atlas->index_buffer, atlas->atlas_w,
@@ -144,7 +153,7 @@ void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, i
 				CatClock_DebugDumpGenericAtlasToPam("dump_tail_halo_atlas.pam", atlas->index_buffer,
 													atlas->atlas_w, atlas->atlas_h);
 			} else {
-				char filename_buf[128]; /* Fixed sizing buffer width added */
+				char filename_buf[128];
 				snprintf(filename_buf, sizeof(filename_buf), "dump_tail_body_atlas_fps%d_%dx%d.pam",
 						 ctx.target_fps, atlas->atlas_rows, atlas->atlas_cols);
 				CatClock_DebugDumpGenericAtlasToPam(filename_buf, atlas->index_buffer,
@@ -197,12 +206,39 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas) {
 	atlas->scale_half_steps = 0;
 }
 
-/**
- * Calculates the optimal number of rows and columns to pack 'fps' cells
- * of size 'cell_w' x 'cell_h' such that the overall sheet is as square as possible.
+/******************************************************************************
+ * +------------------------+-------------------------------------------------+
+ * | Metric / Feature       | POT Hardcoded Grid                              |
+ * +------------------------+-------------------------------------------------+
+ * | VRAM Footprint         | Higher (often includes empty padding space)     |
+ * | Mipmapping Safety      | High (avoids filter color bleeding)             |
+ * | Sampling Performance   | Slightly faster addressing on ancient hardware  |
+ * | GPU Texture Wrap Mode  | Fully supports Repeat / Mirror modes natively   |
+ * +------------------------+-------------------------------------------------+
+ * | Metric / Feature       | Geometric Squareness Loop                       |
+ * +------------------------+-------------------------------------------------+
+ * | VRAM Footprint         | Lower (maximizes density of allocated rectangle)|
+ * | Mipmapping Safety      | Low (sub-textures bleed if dimensions skew)     |
+ * | Sampling Performance   | Identical on modern desktop hardware            |
+ * | GPU Texture Wrap Mode  | Limited to Clamp-to-Edge constraints            |
+ * +------------------------+-------------------------------------------------+
+ *
+ * ARCHITECTURAL DECISION:
+ * Because this project (catclock-sdl3) re-bakes sprite sheets on-demand during
+ * scaling events and renders frames with a 1:1 pixel mapping, the Geometric
+ * Aspect-Ratio Optimization routine is the superior choice. It eliminates
+ * wasted padding bytes and minimizes the runtime memory footprint.
  *
  * Caveat emptor: The 2D bin packing problem is NP-hard.
  *
+ *****************************************************************************/
+#if (1)
+/**
+ * @brief Geometric Aspect-Ratio Optimization Routine
+ *
+ * Calculates the optimal number of rows and columns to pack 'fps' cells
+ * of size 'cell_w' x 'cell_h' such that the overall sheet is as square as possible.
+
  * @param fps      Total number of frames/cells to pack (1 to 1024)
  * @param cell_w   Width of an individual cell (e.g., 64 or 96)
  * @param cell_h   Height of an individual cell (e.g., 32 or 96)
@@ -286,3 +322,187 @@ void get_optimal_sprite_sheet_dimensions(int fps, int cell_w, int cell_h, int* o
 	*out_rows = best_rows;
 	*out_cols = best_cols;
 }
+#else
+/**
+ * @brief Computes dynamic grid configurations to eliminate driver Power-of-Two padding.
+ * Falls back to geometric aspect-ratio packing for non-precalculated dimensions.
+ *
+ * Based on results from precompute_atlases.py.
+ */
+void get_optimal_sprite_sheet_dimensions(int fps, int cell_w, int cell_h, int* out_rows,
+										 int* out_cols) {
+	if (fps <= 0 || cell_w <= 0 || cell_h <= 0 || !out_rows || !out_cols) {
+		if (out_rows)
+			*out_rows = 0;
+		if (out_cols)
+			*out_cols = 0;
+		return;
+	}
+
+	int total_frames = fps + 1;
+	int cols = 1;
+
+	if (cell_w == 64 && cell_h == 32) {
+		// --- EYES (PUPILS) LAYER (64x32) ---
+		if (fps <= 3)
+			cols = 1;
+		else if (fps <= 15)
+			cols = 2;
+		else if (fps <= 23)
+			cols = 3;
+		else if (fps <= 63)
+			cols = 4;
+		else if (fps <= 83)
+			cols = 6;
+		else if (fps <= 111)
+			cols = 7;
+		else if (fps <= 255)
+			cols = 8;
+		else if (fps <= 263)
+			cols = 11;
+		else if (fps <= 311)
+			cols = 12;
+		else if (fps <= 363)
+			cols = 13;
+		else if (fps <= 419)
+			cols = 14;
+		else if (fps <= 479)
+			cols = 15;
+		else if (fps <= 1023)
+			cols = 16;
+		else
+			cols = 23;
+	} else if (cell_w == 96 && cell_h == 96) {
+		// --- TAIL BODY LAYER (96x96) ---
+		if (fps <= 1)
+			cols = 1;
+		else if (fps <= 9)
+			cols = 2;
+		else if (fps <= 11)
+			cols = 3;
+		else if (fps <= 19)
+			cols = 4;
+		else if (fps <= 49)
+			cols = 5;
+		else if (fps <= 55)
+			cols = 7;
+		else if (fps <= 71)
+			cols = 8;
+		else if (fps <= 89)
+			cols = 9;
+		else if (fps <= 209)
+			cols = 10;
+		else if (fps <= 239)
+			cols = 15;
+		else if (fps <= 271)
+			cols = 16;
+		else if (fps <= 305)
+			cols = 17;
+		else if (fps <= 341)
+			cols = 18;
+		else if (fps <= 379)
+			cols = 19;
+		else if (fps <= 419)
+			cols = 20;
+		else if (fps <= 881)
+			cols = 21;
+		else if (fps <= 929)
+			cols = 30;
+		else if (fps <= 991)
+			cols = 31;
+		else
+			cols = 32;
+	} else if (cell_w == 64 && cell_h == 96) {
+		// --- HANDS LAYER (64x96) ---
+		if (fps <= 3)
+			cols = 2;
+		else if (fps <= 5)
+			cols = 3;
+		else if (fps <= 7)
+			cols = 4;
+		else if (fps <= 9)
+			cols = 2;
+		else if (fps <= 19)
+			cols = 4;
+		else if (fps <= 23)
+			cols = 6;
+		else if (fps <= 34)
+			cols = 7;
+		else if (fps <= 79)
+			cols = 8;
+		else if (fps <= 83)
+			cols = 11;
+		else if (fps <= 95)
+			cols = 12;
+		else if (fps <= 116)
+			cols = 13;
+		else if (fps <= 134)
+			cols = 14;
+		else if (fps <= 149)
+			cols = 15;
+		else if (fps <= 159)
+			cols = 16;
+		else if (fps <= 167)
+			cols = 8;
+		else if (fps <= 335)
+			cols = 16;
+		else if (fps <= 359)
+			cols = 23;
+		else if (fps <= 383)
+			cols = 24;
+		else if (fps <= 424)
+			cols = 25;
+		else if (fps <= 458)
+			cols = 26;
+		else if (fps <= 485)
+			cols = 27;
+		else if (fps <= 531)
+			cols = 28;
+		else if (fps <= 569)
+			cols = 29;
+		else if (fps <= 599)
+			cols = 30;
+		else if (fps <= 650)
+			cols = 31;
+		else if (fps <= 703)
+			cols = 32;
+		else if (fps <= 713)
+			cols = 34;
+		else if (fps <= 767)
+			cols = 32;
+		else if (fps <= 776)
+			cols = 37;
+		else if (fps <= 831)
+			cols = 32;
+		else if (fps <= 839)
+			cols = 40;
+		else
+			cols = 32;
+	} else {
+		// --- FALLBACK: PLAIN GEOMETRIC EVEN SQUARE PACKING ---
+		long min_diff = -1;
+		int best_cols = 1;
+
+		for (int c = 1; c <= total_frames; c++) {
+			int r = (total_frames + c - 1) / c;
+			long sheet_w = (long) c * cell_w;
+			long sheet_h = (long) r * cell_h;
+			long diff = labs(sheet_w - sheet_h);
+
+			if (min_diff == -1 || diff < min_diff) {
+				min_diff = diff;
+				best_cols = c;
+			}
+		}
+		cols = best_cols;
+	}
+
+	// Guard constraint to ensure configuration never overflows frame allocation limits
+	if (cols > total_frames) {
+		cols = total_frames;
+	}
+
+	*out_cols = cols;
+	*out_rows = (total_frames + cols - 1) / cols;
+}
+#endif

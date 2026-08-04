@@ -211,6 +211,8 @@ layout(binding = 1) uniform cb_hands_params {
     int min_frame;
     int sec_frame;
     int use_decorations_flag;
+    int hands_cols;
+    int hands_rows;
     vec4 hour_color;
     vec4 minute_color;
     vec4 seconds_color;
@@ -223,9 +225,12 @@ layout(binding = 0) uniform sampler main_sampler;
 in vec2 frag_uv;
 out vec4 frag_color;
 
-vec2 CalculateAtlasUvHands(vec2 local_box_uv, int frame_idx, float target_rows) {
-    float cols = 10.0;
-    vec2 segment_cell = vec2(1.0 / cols, 1.0 / target_rows);
+vec2 CalculateAtlasUvHands(vec2 local_box_uv, int frame_idx) {
+    // Read both dimensions purely out of your hardware-aware pipeline uniforms
+    float cols = float(hands_cols);
+    float rows = float(hands_rows);
+
+    vec2 segment_cell = vec2(1.0 / cols, 1.0 / rows);
     vec2 cell_offset = vec2(mod(float(frame_idx), cols), floor(float(frame_idx) / cols)) * segment_cell;
     return cell_offset + (local_box_uv * segment_cell);
 }
@@ -248,9 +253,9 @@ void main() {
     vec2 hand_box_uv = vec2((overlay_uv.x - (42.0 / CANVAS_W)) / (64.0 / CANVAS_W),
             (overlay_uv.y - (95.0 / 288.0)) / (96.0 / 288.0));
 
-    bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame, 6.0)).x > 0.001;
-    bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame, 6.0)).x > 0.001;
-    bool sec_hit = texture(sampler2D(seconds_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, sec_frame, 6.0)).x > 0.001;
+    bool hour_hit = texture(sampler2D(hours_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, hour_frame)).x > 0.001;
+    bool min_hit = texture(sampler2D(mins_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, min_frame)).x > 0.001;
+    bool sec_hit = texture(sampler2D(seconds_hand_sheet, main_sampler), CalculateAtlasUvHands(hand_box_uv, sec_frame)).x > 0.001;
 
     vec4 mixed_pixel = vec4(0.0);
 

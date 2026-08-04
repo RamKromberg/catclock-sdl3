@@ -153,6 +153,8 @@ typedef struct {
 	int eyes_optimized_cols;
 	int tail_optimized_rows;
 	int tail_optimized_cols;
+	int hands_optimized_rows;
+	int hands_optimized_cols;
 
 	/* Instanced layout computational states */
 	CatClock_ComputeAtlas hours_atlas;

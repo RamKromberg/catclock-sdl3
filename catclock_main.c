@@ -1079,12 +1079,18 @@ int main(int argc, char* argv[]) {
 			   1. OFFSCREEN ATLAS PIPELINE REBAKING & VRAM MEMORY COMMIT
 			   ============================================================================= */
 			if (ctx.texture_cache_stale) {
+				// Instantly query the pre-calculated context properties
+				int h_cols = ctx.hands_optimized_cols;
+
 				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, HAND_CELL_W, HAND_CELL_H,
-											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &hour_cfg);
+											TOTAL_HAND_PHASES, h_cols, CatClock_ShaderHands,
+											&hour_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.minutes_atlas, HAND_CELL_W, HAND_CELL_H,
-											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &min_cfg);
+											TOTAL_HAND_PHASES, h_cols, CatClock_ShaderHands,
+											&min_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, HAND_CELL_W, HAND_CELL_H,
-											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &sec_cfg);
+											TOTAL_HAND_PHASES, h_cols, CatClock_ShaderHands,
+											&sec_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, EYES_CELL_W, EYES_CELL_H,
 											optimized_pendulum_frames, 0, CatClock_ShaderEyes,
 											NULL);
@@ -1132,7 +1138,6 @@ int main(int argc, char* argv[]) {
 				bake_uniform_payload.pendulum_frame_idx = pendulum_frame_idx;
 				bake_uniform_payload.generation_mode_flag = 1;
 
-				// Set the bake pass row configurations to match the optimized layout bounds
 				bake_uniform_payload.tail_rows = ctx.tail_optimized_rows;
 
 				ExecuteOffscreenBakePasses(active_viewport_w, active_viewport_h,
@@ -1158,6 +1163,8 @@ int main(int argc, char* argv[]) {
 			hands_payload.min_frame = min_frame_idx;
 			hands_payload.sec_frame = sec_frame_idx;
 			hands_payload.use_decorations_flag = dec_flag_value;
+			hands_payload.hands_cols = ctx.hands_optimized_cols;
+			hands_payload.hands_rows = ctx.hands_optimized_rows;
 			CatClock_NormalizeColorToUniform(ctx.hour_color, hands_payload.hour_color);
 			CatClock_NormalizeColorToUniform(ctx.minute_color, hands_payload.minute_color);
 			CatClock_NormalizeColorToUniform(ctx.seconds_color, hands_payload.seconds_color);

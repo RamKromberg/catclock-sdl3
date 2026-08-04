@@ -231,4 +231,9 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	get_optimal_sprite_sheet_dimensions(tail_p_frames, TAIL_CELL_W, TAIL_CELL_H,
 										&context->tail_optimized_rows,
 										&context->tail_optimized_cols);
+
+	// Pass 59 so that total_frames internally becomes exactly 60
+	get_optimal_sprite_sheet_dimensions(TOTAL_HAND_PHASES - 1, HAND_CELL_W, HAND_CELL_H,
+										&context->hands_optimized_rows,
+										&context->hands_optimized_cols);
 }
