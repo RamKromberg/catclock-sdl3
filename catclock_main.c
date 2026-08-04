@@ -128,7 +128,7 @@ void Diagnostics_DumpMaterialCompositionToDisk(struct CatClock_XbmLibrary* libra
 	if (!library)
 		return;
 
-	/* Calculate the active scale factor derived from the Stage 2 integer tracker */
+	/* Calculate the active scale factor */
 	float active_scale = (float) ctx.current_half_steps / 2.0f;
 
 	/* Fetch pristine unscaled original workspace sizing metrics from your assets metadata */
@@ -905,7 +905,6 @@ int main(int argc, char* argv[]) {
 		int type;
 		SDL_Color color;
 	} sec_cfg = { HAND_TYPE_SECOND, ctx.seconds_color };
-	CatClock_TailShaderArgs tail_data = { 0.0f, 0.0f, false };
 
 	int init_pixel_w = 0, init_pixel_h = 0;
 	SDL_GetWindowSizeInPixels(ctx.window, &init_pixel_w, &init_pixel_h);
@@ -1062,13 +1061,23 @@ int main(int argc, char* argv[]) {
 			int sec_frame_idx = current_sec % 60;
 			int min_frame_idx = current_min % 60;
 			int hour_frame_idx = ((current_hour * 5) + (current_min / 12)) % 60;
-			float dynamic_fps = (float) ((ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps);
-			float total_anim_frames = dynamic_fps * 2.0f;
-			int pendulum_frame_idx
-				= (int) fmod(computed_day_time_seconds * dynamic_fps, total_anim_frames);
-			int calculated_rows = ((ctx.target_fps * 2) + 9) / 10;
+
 			int dec_flag_value = (ctx.window_bg_color.a != 0) ? 1 : 0;
 
+			int optimized_pendulum_frames = ctx.target_fps + 1;
+			int total_cycle_steps = ctx.target_fps * 2;
+			int current_tick_bucket = (int) floorf(elapsed_delta_seconds * (float) target_fps);
+			int raw_tick_index = current_tick_bucket % total_cycle_steps;
+			if (raw_tick_index < 0) {
+				raw_tick_index += total_cycle_steps;
+			}
+			int pendulum_frame_idx = (raw_tick_index <= target_fps)
+				? raw_tick_index
+				: (total_cycle_steps - raw_tick_index);
+
+			/* =============================================================================
+			   1. OFFSCREEN ATLAS PIPELINE REBAKING & VRAM MEMORY COMMIT
+			   ============================================================================= */
 			if (ctx.texture_cache_stale) {
 				CatClock_RebakeComputeAtlas(NULL, &ctx.hours_atlas, HAND_CELL_W, HAND_CELL_H,
 											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &hour_cfg);
@@ -1077,16 +1086,18 @@ int main(int argc, char* argv[]) {
 				CatClock_RebakeComputeAtlas(NULL, &ctx.seconds_atlas, HAND_CELL_W, HAND_CELL_H,
 											TOTAL_HAND_PHASES, 10, CatClock_ShaderHands, &sec_cfg);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.eyes_atlas, EYES_CELL_W, EYES_CELL_H,
-											(ctx.target_fps * 2), 10, CatClock_ShaderEyes, NULL);
+											optimized_pendulum_frames, 0, CatClock_ShaderEyes,
+											NULL);
 				CatClock_RebakeComputeAtlas(NULL, &ctx.tail_atlas, TAIL_CELL_W, TAIL_CELL_H,
-											(ctx.target_fps * 2), 10, CatClock_ShaderTail,
-											&tail_data);
+											optimized_pendulum_frames, 0, CatClock_ShaderTail,
+											NULL);
 
 #ifdef DEBUG_DUMP_ATLAS
 				Diagnostics_DumpMaterialCompositionToDisk(runtime_xbm_handle);
 				printf("[Trace] Dynamic textures cached and committed to disk files.\n");
 #endif
 
+				// Rebind the staging arrays cleanly into their VRAM textures
 				CatClock_BakeAtlasToVram(&hours_atlas_image_slot, &hours_atlas_view_slot,
 										 ctx.hours_atlas.index_buffer, ctx.hours_atlas.atlas_w,
 										 ctx.hours_atlas.atlas_h, "CatClock-HoursHands-Atlas");
@@ -1119,16 +1130,24 @@ int main(int argc, char* argv[]) {
 				bake_uniform_payload.min_frame_idx = min_frame_idx;
 				bake_uniform_payload.sec_frame_idx = sec_frame_idx;
 				bake_uniform_payload.pendulum_frame_idx = pendulum_frame_idx;
-				bake_uniform_payload.tail_pupils_rows = calculated_rows;
+				bake_uniform_payload.generation_mode_flag = 1;
+
+				// Set the bake pass row configurations to match the optimized layout bounds
+				bake_uniform_payload.tail_rows = ctx.tail_optimized_rows;
 
 				ExecuteOffscreenBakePasses(active_viewport_w, active_viewport_h,
 										   &bake_uniform_payload);
 				ctx.texture_cache_stale = false;
 			}
+
+			/* =============================================================================
+			   2. RUNTIME UNIFORM STRUCT PACKING AND RENDERING DISPATCH
+			   ============================================================================= */
 			cb_tail_params_t tail_payload;
 			memset(&tail_payload, 0, sizeof(cb_tail_params_t));
 			tail_payload.tail_frame = pendulum_frame_idx;
-			tail_payload.tail_pupils_rows = calculated_rows;
+			tail_payload.tail_rows = ctx.tail_optimized_rows;
+			tail_payload.tail_cols = ctx.tail_optimized_cols;
 			tail_payload.use_decorations_flag = dec_flag_value;
 			CatClock_NormalizeColorToUniform(ctx.cat_color, tail_payload.cat_color);
 			CatClock_NormalizeColorToUniform(ctx.outline_color, tail_payload.outline_color);
@@ -1146,7 +1165,8 @@ int main(int argc, char* argv[]) {
 			cb_pupil_params_t pupil_payload;
 			memset(&pupil_payload, 0, sizeof(cb_pupil_params_t));
 			pupil_payload.pupil_frame = pendulum_frame_idx;
-			pupil_payload.tail_pupils_rows = calculated_rows;
+			pupil_payload.eyes_rows = ctx.eyes_optimized_rows;
+			pupil_payload.eyes_cols = ctx.eyes_optimized_cols;
 			pupil_payload.use_decorations_flag = dec_flag_value;
 			CatClock_NormalizeColorToUniform(ctx.pupil_color, pupil_payload.pupil_color);
 
@@ -1228,7 +1248,6 @@ int main(int argc, char* argv[]) {
 			// ----------------------------------------------------------------------------
 			sg_apply_pipeline(draw_tail_pipeline);
 			sg_apply_bindings(&base_bindings);
-			// CRITICAL FIX: Lock tail viewport identically to the static mesh bounds
 			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_tail_params, &SG_RANGE(tail_payload));
 			sg_draw(0, 4, 1);
@@ -1248,14 +1267,12 @@ int main(int argc, char* argv[]) {
 			// ----------------------------------------------------------------------------
 			sg_apply_pipeline(draw_pupils_pipeline);
 			sg_apply_bindings(&base_bindings);
-			// CRITICAL FIX: Lock pupil viewport identically to the static mesh bounds
 			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_pupil_params, &SG_RANGE(pupil_payload));
 			sg_draw(0, 4, 1);
 
 			sg_apply_pipeline(draw_hands_pipeline);
 			sg_apply_bindings(&base_bindings);
-			// CRITICAL FIX: Lock clock hands viewport identically to the static mesh bounds
 			sg_apply_viewport(final_offset_x, final_offset_y, final_width, final_height, true);
 			sg_apply_uniforms(UB_cb_hands_params, &SG_RANGE(hands_payload));
 			sg_draw(0, 4, 1);

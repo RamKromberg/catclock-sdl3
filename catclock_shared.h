@@ -93,6 +93,8 @@ typedef struct {
 	int cell_h; // Scaled layout cell height
 	int atlas_w; // Total width of VRAM atlas sheet
 	int atlas_h; // Total height of VRAM atlas sheet
+	int atlas_cols;
+	int atlas_rows;
 	uint32_t scale_half_steps; // Deterministic integer scale tracker (e.g. 2 = 1.0x, 3 = 1.5x)
 	SDL_FRect* src_rects; // Frame clip boundary coordinate array
 	float last_scale; // Scale factors checkpoint monitor
@@ -146,6 +148,12 @@ typedef struct {
 	sg_buffer index_buffer;
 	sg_pipeline draw_pipeline;
 
+	/* Pre-computed grid architecture invariants configured at parsing stage */
+	int eyes_optimized_rows;
+	int eyes_optimized_cols;
+	int tail_optimized_rows;
+	int tail_optimized_cols;
+
 	/* Instanced layout computational states */
 	CatClock_ComputeAtlas hours_atlas;
 	CatClock_ComputeAtlas minutes_atlas;
@@ -170,6 +178,7 @@ void CatClock_DestroyComputeAtlas(CatClock_ComputeAtlas* atlas);
 void CatClock_RebakeComputeAtlas(void* renderer, CatClock_ComputeAtlas* atlas, int cell_base_w,
 								 int cell_base_h, int total_frames, int cols,
 								 CatClock_ShaderCallback shader, void* userdata);
+void get_optimal_sprite_sheet_dimensions(int fps, int cell_w, int cell_h, int* out_rows, int* out_cols);
 
 /* Material composition staging validation hooks */
 uint8_t* CatClock_PreBakeTieMask(const uint8_t* raw_catback, const uint8_t* raw_tie);

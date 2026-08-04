@@ -119,10 +119,7 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 	context->detail_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->sclera_color = (SDL_Color) { 255, 255, 255, 255 };
 	context->outline_color = (SDL_Color) { 255, 255, 255, 255 };
-
-	/* 1. Default color updated to transparent alpha to indicate "no decorations" */
 	context->window_bg_color = (SDL_Color) { 255, 255, 255, 0 };
-
 	context->current_half_steps = 2;
 	context->target_fps = DEFAULT_FPS;
 	context->disable_always_on_top = false;
@@ -223,4 +220,15 @@ void ParseCommandLineArguments(int argc, char* argv[], CatClock_AppContext* cont
 			exit(1);
 		}
 	}
+
+	/* Compute optimized textures early to prevent frame allocations downstream */
+	int eyes_p_frames = context->target_fps + 1;
+	get_optimal_sprite_sheet_dimensions(eyes_p_frames, EYES_CELL_W, EYES_CELL_H,
+										&context->eyes_optimized_rows,
+										&context->eyes_optimized_cols);
+
+	int tail_p_frames = context->target_fps + 1;
+	get_optimal_sprite_sheet_dimensions(tail_p_frames, TAIL_CELL_W, TAIL_CELL_H,
+										&context->tail_optimized_rows,
+										&context->tail_optimized_cols);
 }

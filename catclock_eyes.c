@@ -73,18 +73,18 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	uint8_t* buffer = (uint8_t*) renderer;
 	int atlas_w = sheet_w;
 	int atlas_h = sheet_h;
+
 	(void) userdata;
 
-	int cols = 10;
+	int cols = ctx.eyes_optimized_cols;
 	int total_fps_frames = (ctx.target_fps <= 0) ? DEFAULT_FPS : ctx.target_fps;
-	int total_frames = total_fps_frames * 2;
+	int total_frames = total_fps_frames + 1;
 	int cell_w = atlas_w / cols;
 
-	/* Derive the local float scale factor cleanly from unified half-steps tracking */
 	float scale = (float) ctx.current_half_steps / 2.0f;
 	int scaled_cell_h = (int) ceilf(32.0f * scale) + 2;
 
-	/* Base proportions matching original asset canvas sizing rules */
+	/* 1. STRUCTURAL DIMENSIONS KEPT STRICTLY UNSCALED FOR TRADITIONAL COMPOSITION */
 	float pup_base_w = 2.5f * scale;
 	float pup_base_h = 10.5f * scale;
 	float max_offset_x = 5.0f * scale;
@@ -97,28 +97,21 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 	float base_eye_w = 23.0f;
 	float base_gap_x = 36.0f;
 
-	float global_origin_x = (float) CHOP_OFFSET_X;
-	float global_origin_y = (float) CHOP_OFFSET_Y;
-
-	/* Enforce rigid bounding-box clipping markers to stop color leakage between frames */
-	int clip_x0 = cell_x
-		+ ((int) floorf((global_origin_x + base_pad_x) * scale)
-		   - (int) floorf(global_origin_x * scale));
-	int clip_y0 = cell_y
-		+ ((int) floorf((global_origin_y + base_pad_y) * scale)
-		   - (int) floorf(global_origin_y * scale));
+	/* 2. RE-ALIGN CORNER ANCHORS WITHOUT COMBINED SQUARING MUTATIONS */
+	int clip_x0 = cell_x + (int) floorf(base_pad_x * scale);
+	int clip_y0 = cell_y + (int) floorf(base_pad_y * scale);
 	int clip_x1 = clip_x0 + (int) ceilf((float) unscaled_mask_w * scale);
 	int clip_y1 = clip_y0 + (int) ceilf((float) unscaled_mask_h * scale);
 
+	/* 3. CENTER MAPS MULTIPLIED PRECISELY SINGLE-PASS */
 	float left_eye_cx = (float) cell_x + (base_pad_x + (base_eye_w / 2.0f)) * scale;
 	float right_eye_cx = (float) cell_x + (base_gap_x + (base_eye_w / 2.0f)) * scale;
 	float true_center_y = (float) cell_y + (base_pad_y + (base_eye_w / 2.0f)) * scale;
 
-	float phase_ratio = ((float) frame_idx + 0.5f) / (float) total_frames;
-	float swing_angle = phase_ratio * 2.0f * (float) M_PI;
+	float phase_ratio = (float) frame_idx / (float) (total_frames - 1);
+	float swing_angle = -((float) M_PI / 2.0f) + (phase_ratio * (float) M_PI);
 	float horizontal_look = sinf(swing_angle);
 
-	/* Clean cell footprint boundary */
 	for (int y = cell_y; y < cell_y + scaled_cell_h; y++) {
 		if (y >= atlas_h)
 			continue;
@@ -129,7 +122,6 @@ void CatClock_ShaderEyes(void* renderer, int cell_x, int cell_y, int sheet_w, in
 		}
 	}
 
-	/* Draw left and right moving pupils safely clipped inside their respective sockets */
 	SoftwareDrawPupilOval(buffer, left_eye_cx, true_center_y, pup_base_w, pup_base_h,
 						  horizontal_look, max_offset_x, atlas_w, atlas_h, clip_x0, clip_y0,
 						  clip_x1, clip_y1);

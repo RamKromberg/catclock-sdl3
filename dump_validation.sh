@@ -24,82 +24,95 @@ for f in *.pam; do
 done
 rm -f *.pam
 
-# ================================================================================
-# EVALUATE GEOMETRY COEFFICIENTS DYNAMICALLY (STAGE 2)
-# ================================================================================
-if [ -f dump_seconds_atlas.png ]; then
+    # ================================================================================
+    # EVALUATE GEOMETRY COEFFICIENTS DYNAMICALLY (STAGE 2)
+    # ================================================================================
+    if [ -f dump_seconds_atlas.png ]; then
     LIVE_W=$(identify -format "%w" dump_seconds_atlas.png)
-elif [ -f dump_minutes_atlas.png ]; then
+    elif [ -f dump_minutes_atlas.png ]; then
     LIVE_W=$(identify -format "%w" dump_minutes_atlas.png)
-elif [ -f dump_hours_atlas.png ]; then
+    elif [ -f dump_hours_atlas.png ]; then
     LIVE_W=$(identify -format "%w" dump_hours_atlas.png)
-fi
-if [[ -n "$LIVE_W" ]]; then
+    fi
+    if [[ -n "$LIVE_W" ]]; then
     SCALE_FACTOR=$(echo "scale=4; $LIVE_W / 640" | bc)
-
     CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
     CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
     C_W_MINUS_1=$((CELL_W - 1))
     C_H_MINUS_1=$((CELL_H - 1))
-
     STROKE_W=$(echo "$SCALE_FACTOR / 1" | bc | cut -d. -f1)
     if [ "$STROKE_W" -lt 1 ]; then
-        STROKE_W=1
+    STROKE_W=1
+    fi
+
+    # Detect filename format: dump_tail_body_atlas_fps30_6x6.png
+    TAIL_FILE=$(ls dump_tail_body_atlas_fps*.png 2>/dev/null | head -n 1)
+    if [[ -n "$TAIL_FILE" ]]; then
+        TAIL_GRID_STR=$(echo "$TAIL_FILE" | sed -E 's/.*fps[0-9]+_([0-9]+x[0-9]+)\.png/\1/')
+        TAIL_DUMP_ROWS=$(echo "$TAIL_GRID_STR" | cut -dx -f1)
+        TAIL_DUMP_COLS=$(echo "$TAIL_GRID_STR" | cut -dx -f2)
+    else
+        TAIL_DUMP_ROWS=6
+        TAIL_DUMP_COLS=6
+    fi
+
+    EYES_FILE=$(ls dump_eyes_atlas_fps*.png 2>/dev/null | head -n 1)
+    if [[ -n "$EYES_FILE" ]]; then
+        EYES_GRID_STR=$(echo "$EYES_FILE" | sed -E 's/.*fps[0-9]+_([0-9]+x[0-9]+)\.png/\1/')
+        EYES_DUMP_ROWS=$(echo "$EYES_GRID_STR" | cut -dx -f1)
+        EYES_DUMP_COLS=$(echo "$EYES_GRID_STR" | cut -dx -f2)
+    else
+        EYES_DUMP_ROWS=4
+        EYES_DUMP_COLS=10
     fi
 
     IS_FRACTIONAL=$(echo "$SCALE_FACTOR" | grep "\." || true)
-
     if [ -n "$IS_FRACTIONAL" ]
     then
-        # PATH A: Fractional Half-Steps Math
-        X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
-        Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    # PATH A: Fractional Half-Steps Math
+    X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
     else
-        # PATH B: Whole Integer Scale Steps
-        X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
-        Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    # PATH B: Whole Integer Scale Steps
+    X_START=$(echo "31 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    Y_START=$(echo "45 * $SCALE_FACTOR" | bc | cut -d. -f1)
     fi
-
     X_END=$((X_START + STROKE_W - 1))
     Y_END=$((Y_START + STROKE_W - 1))
-
     RECT_X1=$(echo "2 * $SCALE_FACTOR" | bc | cut -d. -f1)
     RECT_Y1=$(echo "6 * $SCALE_FACTOR" | bc | cut -d. -f1)
     RECT_X2=$(echo "60 * $SCALE_FACTOR" | bc | cut -d. -f1)
     RECT_Y2=$(echo "88 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
     FACE_CROP_W=$(echo "59 * $SCALE_FACTOR" | bc | cut -d. -f1)
     FACE_CROP_H=$(echo "83 * $SCALE_FACTOR" | bc | cut -d. -f1)
     FACE_X=$(echo "20 * $SCALE_FACTOR" | bc | cut -d. -f1)
     FACE_Y=$(echo "100 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
     P1_CROP_W=$(echo "640 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P1_CROP_H=$(echo "576 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P2_CELL_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P3_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P2_W_MINUS_1=$((P2_CELL_W - 1))
     P2_H_MINUS_1=$((P3_CELL_H - 1))
-
     P2_LINE1_START=$(echo "40 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P2_LINE1_END=$((P2_LINE1_START + STROKE_W - 1))
     P2_LINE2_START=$(echo "52 * $SCALE_FACTOR" | bc | cut -d. -f1)
     P2_LINE2_END=$((P2_LINE2_START + STROKE_W - 1))
-
     VIEW_W=$(echo "150 * $SCALE_FACTOR" | bc | cut -d. -f1)
     VIEW_H=$(echo "300 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
     BODY_CROP_W=$(echo "101 * $SCALE_FACTOR" | bc | cut -d. -f1)
     BODY_CROP_H=$(echo "201 * $SCALE_FACTOR" | bc | cut -d. -f1)
     BODY_X=$(echo "24 * $SCALE_FACTOR" | bc | cut -d. -f1)
     BODY_Y=$(echo "12 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
     TAIL_CROP_W=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
     TAIL_CROP_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
     TAIL_X=$(echo "27 * $SCALE_FACTOR" | bc | cut -d. -f1)
     TAIL_Y=$(echo "204 * $SCALE_FACTOR" | bc | cut -d. -f1)
-
     REAL_CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
     REAL_CELL_H=$(echo "96 * $SCALE_FACTOR" | bc | cut -d. -f1)
+
+    # DYNAMIC OVERRIDES LINKED TO DETECTED ATLASED COLS
+    P2_CROP_W=$(( P2_CELL_W * TAIL_DUMP_COLS ))
+    P2_CROP_H=$(( P3_CELL_H * TAIL_DUMP_ROWS ))
 
     # 🎯 OUTER YELLOW FRAME BOUNDARIES (Snaps exactly to the asset frame edges)
     RECT_X1=$(echo "2 * $SCALE_FACTOR" | bc | cut -d. -f1)
@@ -158,18 +171,53 @@ if [[ -n "$LIVE_W" ]]; then
     # ================================================================================
     # PIPELINE 2: TAIL VALIDATION
     # ================================================================================
-    if [ -f dump_tail_body_atlas.png ]; then
-        magick dump_tail_body_atlas.png "$TMP_DIR/color_anchor.png" +append \
-            \( -size ${P2_CELL_W}x${CELL_H} xc:none \
-            +antialias -stroke blue -strokewidth ${STROKE_W} -fill none -draw "rectangle 0,0 ${P2_W_MINUS_1},${C_H_MINUS_1}" \
-            -gravity Forget -geometry +0+0 -compose Over \
-            -stroke none -fill "#00800080" \
-            -draw "rectangle ${P2_LINE1_START},0 ${P2_LINE1_END},${CELL_H}" \
-            -draw "rectangle ${P2_LINE2_START},0 ${P2_LINE2_END},${CELL_H}" \
-            -write mpr:tailgrid +delete \) \
-            \( +clone -tile mpr:tailgrid -draw "color 0,0 reset" \) \
+    # FIXED: Evaluate the dynamically discovered tail asset filename instead of a static string
+    if [[ -n "$TAIL_FILE" ]]; then
+    P2_W_MINUS_1=$((P2_CELL_W - 1))
+    P2_H_MINUS_1=$((P3_CELL_H - 1))
+    P2_LINE1_START=$(echo "40 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_LINE1_END=$((P2_LINE1_START + STROKE_W - 1))
+    P2_LINE2_START=$(echo "52 * $SCALE_FACTOR" | bc | cut -d. -f1)
+    P2_LINE2_END=$((P2_LINE2_START + STROKE_W - 1))
+
+    # Pass the dynamic filename token safely to the ImageMagick canvas builder
+    magick "$TAIL_FILE" "$TMP_DIR/color_anchor.png" +append \
+    \( -size ${P2_CELL_W}x${CELL_H} xc:none \
+    +antialias -stroke blue -strokewidth ${STROKE_W} -fill none -draw "rectangle 0,0 ${P2_W_MINUS_1},${C_H_MINUS_1}" \
+    -gravity Forget -geometry +0+0 -compose Over \
+    -stroke none -fill "#00800080" \
+    -draw "rectangle ${P2_LINE1_START},0 ${P2_LINE1_END},${CELL_H}" \
+    -draw "rectangle ${P2_LINE2_START},0 ${P2_LINE2_END},${CELL_H}" \
+    -write mpr:tailgrid +delete \) \
+    \( +clone -tile mpr:tailgrid -draw "color 0,0 reset" \) \
+    -compose Over -composite \
+    -crop ${P2_CROP_W}x${P2_CROP_H}+0+0 +repage dump_tail_atlas_validation.png
+    fi
+    
+    # ================================================================================
+    # PIPELINE 2.5: EYES VALIDATION
+    # ================================================================================
+    if [[ -n "$EYES_FILE" ]]; then
+        # Calculate cell metrics for the eye sub-rectangles based on the scale factor
+        # Base unscaled dimensions for an eye cell are 64x32
+        E_CELL_W=$(echo "64 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        E_CELL_H=$(echo "32 * $SCALE_FACTOR" | bc | cut -d. -f1)
+        E_W_MINUS_1=$((E_CELL_W - 1))
+        E_H_MINUS_1=$((E_CELL_H - 1))
+        
+        # Bound the crop view using the extracted optimized grid column/row limits
+        E_CROP_W=$(( E_CELL_W * EYES_DUMP_COLS ))
+        E_CROP_H=$(( E_CELL_H * EYES_DUMP_ROWS ))
+
+        # Generate a validation sheet containing just the crisp cell borders
+        magick "$EYES_FILE" "$TMP_DIR/color_anchor.png" +append \
+            \( -size ${E_CELL_W}x${E_CELL_H} xc:none \
+            +antialias -stroke blue -strokewidth ${STROKE_W} -fill none \
+            -draw "rectangle 0,0 ${E_W_MINUS_1},${E_H_MINUS_1}" \
+            -write mpr:eyesgrid +delete \) \
+            \( +clone -tile mpr:eyesgrid -draw "color 0,0 reset" \) \
             -compose Over -composite \
-            -crop ${P2_CROP_W}x${P2_CROP_H}+0+0 +repage dump_tail_atlas_validation.png
+            -crop ${E_CROP_W}x${E_CROP_H}+0+0 +repage dump_eyes_atlas_validation.png
     fi
 else
     echo dump_seconds_atlas.png not found.
@@ -225,48 +273,53 @@ if [ -f dump_material_composition.png ]; then
     # PIPELINE 5: VIEWPORT COMPOSITION VALIDATION
     # ================================================================================
     if [ -f dump_tail_atlas_validation.png ]; then
-        echo "[+] Emulating transparent ${VIEW_W}x${VIEW_H} viewports with parameterized constraints..."
+    echo "[+] Emulating transparent ${VIEW_W}x${VIEW_H} viewports with parameterized constraints..."
+    magick dump_material_composition.png "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/anchored_body.png"
+    magick dump_tail_atlas_validation.png "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/anchored_atlas.png"
 
-        magick dump_material_composition.png "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/anchored_body.png"
-        magick dump_tail_atlas_validation.png "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/anchored_atlas.png"
+    # Compute total unique loop steps dynamically (Rows * Columns - 1)
+    MAX_GRID_IDX=$(( (TAIL_DUMP_ROWS * TAIL_DUMP_COLS) - 1 ))
+    for idx in $(seq 0 $MAX_GRID_IDX); do
+    X_OFF=$(( (idx % TAIL_DUMP_COLS) * P2_CELL_W ))
+    Y_OFF=$(( (idx / TAIL_DUMP_COLS) * P3_CELL_H ))
+    PAD_IDX=$(printf "%02d" "$idx")
+    magick "$TMP_DIR/anchored_atlas.png" -crop ${P2_CELL_W}x${P3_CELL_H}+${X_OFF}+${Y_OFF} +repage \
+    "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/tail_${PAD_IDX}.png"
+    magick -size ${VIEW_W}x${VIEW_H} xc:none \
+    -stroke blue -strokewidth 1 -fill none -draw "rectangle 0,0 $((VIEW_W-1)),$((VIEW_H-1))" \
+    -stroke blue -strokewidth 1 -fill none -draw "rectangle ${TAIL_X},${TAIL_Y} $((TAIL_X + TAIL_CROP_W - 1)),$((TAIL_Y + TAIL_CROP_H - 1))" \
+    \( "$TMP_DIR/tail_${PAD_IDX}.png" -crop ${TAIL_CROP_W}x${TAIL_CROP_H}+0+0 +repage \) -geometry +${TAIL_X}+${TAIL_Y} -compose Over -composite \
+    \( "$TMP_DIR/anchored_body.png" -crop ${BODY_CROP_W}x${BODY_CROP_H}+0+0 +repage \) -geometry +${BODY_X}+${BODY_Y} -compose Over -composite \
+    "$TMP_DIR/color_anchor.png" +append \
+    "$TMP_DIR/view_${PAD_IDX}.png"
+    done
 
-        for idx in $(seq 0 59); do
-            X_OFF=$(( (idx % 10) * P2_CELL_W ))
-            Y_OFF=$(( (idx / 10) * P3_CELL_H ))
-            PAD_IDX=$(printf "%02d" "$idx")
+    MAX_ROW_IDX=$(( TAIL_DUMP_ROWS - 1 ))
+    MAX_COL_IDX=$(( TAIL_DUMP_COLS - 1 ))
+    for row in $(seq 0 $MAX_ROW_IDX); do
+    ROW_FILES=""
+    for col in $(seq 0 $MAX_COL_IDX); do
+    idx=$(( (row * TAIL_DUMP_COLS) + col ))
+    PAD_IDX=$(printf "%02d" "$idx")
+    ROW_FILES="${ROW_FILES} $TMP_DIR/view_${PAD_IDX}.png"
+    done
+    magick $ROW_FILES -background none +append "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/row_${row}.png"
+    done
 
-            magick "$TMP_DIR/anchored_atlas.png" -crop ${P2_CELL_W}x${P3_CELL_H}+${X_OFF}+${Y_OFF} +repage \
-                "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/tail_${PAD_IDX}.png"
+    # Collect all dynamic row slices together
+    ROW_COMPOSITE_FILES=""
+    for row in $(seq 0 $MAX_ROW_IDX); do
+        ROW_COMPOSITE_FILES="${ROW_COMPOSITE_FILES} $TMP_DIR/row_${row}.png"
+    done
 
-            magick -size ${VIEW_W}x${VIEW_H} xc:none \
-                -stroke blue -strokewidth 1 -fill none -draw "rectangle 0,0 $((VIEW_W-1)),$((VIEW_H-1))" \
-                -stroke blue -strokewidth 1 -fill none -draw "rectangle ${TAIL_X},${TAIL_Y} $((TAIL_X + TAIL_CROP_W - 1)),$((TAIL_Y + TAIL_CROP_H - 1))" \
-                \( "$TMP_DIR/tail_${PAD_IDX}.png" -crop ${TAIL_CROP_W}x${TAIL_CROP_H}+0+0 +repage \) -geometry +${TAIL_X}+${TAIL_Y} -compose Over -composite \
-                \( "$TMP_DIR/anchored_body.png" -crop ${BODY_CROP_W}x${BODY_CROP_H}+0+0 +repage \) -geometry +${BODY_X}+${BODY_Y} -compose Over -composite \
-                "$TMP_DIR/color_anchor.png" +append \
-                "$TMP_DIR/view_${PAD_IDX}.png"
-        done
-
-        for row in $(seq 0 5); do
-            ROW_FILES=""
-            for col in $(seq 0 9); do
-                idx=$(( (row * 10) + col ))
-                PAD_IDX=$(printf "%02d" "$idx")
-                ROW_FILES="${ROW_FILES} $TMP_DIR/view_${PAD_IDX}.png"
-            done
-            magick $ROW_FILES -background none +append "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/row_${row}.png"
-        done
-
-        magick "$TMP_DIR/row_0.png" "$TMP_DIR/row_1.png" "$TMP_DIR/row_2.png" \
-            "$TMP_DIR/row_3.png" "$TMP_DIR/row_4.png" "$TMP_DIR/row_5.png" \
-            -background none -append "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/tmp_composite.png"
-
-        FINAL_TOTAL_W=$(( VIEW_W * 10 ))
-        FINAL_TOTAL_H=$(( VIEW_H * 6 ))
-        magick "$TMP_DIR/tmp_composite.png" -crop ${FINAL_TOTAL_W}x${FINAL_TOTAL_H}+0+0 +repage \
-            "$TMP_DIR/color_anchor.png" +append -crop ${FINAL_TOTAL_W}x${FINAL_TOTAL_H}+0+0 +repage \
-            dump_tail_composition_validation.png
+    magick $ROW_COMPOSITE_FILES -background none -append "$TMP_DIR/color_anchor.png" +append "$TMP_DIR/tmp_composite.png"
+    FINAL_TOTAL_W=$(( VIEW_W * TAIL_DUMP_COLS ))
+    FINAL_TOTAL_H=$(( VIEW_H * TAIL_DUMP_ROWS ))
+    magick "$TMP_DIR/tmp_composite.png" -crop ${FINAL_TOTAL_W}x${FINAL_TOTAL_H}+0+0 +repage \
+    "dump_material_composition.png" +append -crop ${FINAL_TOTAL_W}x${FINAL_TOTAL_H}+0+0 +repage \
+    dump_tail_composition_validation.png
     fi
+
 else
     echo dump_material_composition.png not found.
 fi

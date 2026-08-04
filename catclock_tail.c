@@ -35,8 +35,17 @@ void CatClock_ShaderTail(void* target_buffer, int cell_x, int cell_y, int sheet_
 	uint8_t palette_idx = is_halo ? PALETTE_HALO : PALETTE_CAT_BODY;
 
 	int total_tail_frames = ctx.tail_atlas.total_frames > 0 ? ctx.tail_atlas.total_frames : 1;
-	float progress = ((float) frame_idx + 1.0f) / (float) total_tail_frames;
-	float sin_wave = sinf(progress * 2.0f * (float) M_PI);
+
+	// Scale progress linearly from 0.0f to 1.0f across the columns
+	float progress = (float) frame_idx / (float) (total_tail_frames - 1);
+
+	// Sweep the angle from -90 degrees (-PI/2) to +90 degrees (+PI/2)
+	float swing_angle = -((float) M_PI / 2.0f) + (progress * (float) M_PI);
+
+	// sinf() yields a perfect linear progression from -1.0f up to +1.0f
+	float sin_wave = sinf(swing_angle);
+
+	// Normalize into [0.0f ... 1.0f] matching your blending routines
 	float normalized_wave = (sin_wave + 1.0f) / 2.0f;
 
 	float MAX_LEFT_ANGLE_DEG = -18.0f;
