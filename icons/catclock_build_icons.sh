@@ -103,7 +103,8 @@ EOF
 
 # Target paths under icons/
 PYTHON_TRACER="cook_catclock_47_to_svg.py"
-OUTPUT_SVG="icons/catclock.svg"
+OUTPUT_SVG="icons/hicolor/scalable/apps/catclock.svg"
+mkdir -p icons/hicolor/scalable/apps
 
 # 1. Strip the helper colors to produce a clean, un-outlined 47x47 grayscale image for the SVG
 magick alpha_47x47.png -fill black -opaque blue -colorspace Gray icons/catclock_47_clean.png

@@ -2,6 +2,10 @@
 
 A modernized, high-performance Kit-Cat Clock desktop widget. This project ports the [classic X11 `catclock` application](https://github.com/barkythedog/catclock) to the modern SDL3 framework and Sokol GFX pipeline. It combines vintage pixel-art aesthetics with a low-overhead, multi-platform runtime architecture.
 
+<p align="center">
+  <img src="./catclock_preview.apng" alt="CatClock SDL3 preview animation" width="206" height="576">
+</p>
+
 ---
 
 ## 🚀 Engineering Features
